@@ -28,7 +28,8 @@ const elements = {
     receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
     recentPeersList: document.getElementById('recent-peers-list'),
-    clearPeers: document.getElementById('clear-peers')
+    clearPeers: document.getElementById('clear-peers'),
+    shareId: document.getElementById('share-id')
 };
 
 // State
@@ -156,6 +157,23 @@ function generateQRCode(peerId) {
             colorLight: '#ffffff',
             correctLevel: QRCode.CorrectLevel.H
         });
+
+        // Make QR code clickable for sharing on mobile
+        elements.qrcode.style.cursor = 'pointer';
+        elements.qrcode.title = 'Click to share';
+        elements.qrcode.onclick = async () => {
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        url: qrUrl
+                    });
+                } catch (error) {
+                    if (error.name !== 'AbortError') {
+                        console.error('Error sharing:', error);
+                    }
+                }
+            }
+        };
     } catch (error) {
         console.error('QR Code Generation Error:', error);
     }
@@ -692,6 +710,12 @@ function init() {
     initIndexedDB();
     loadRecentPeers();
     checkUrlForPeerId(); // Check URL for peer ID on load
+    
+    // Show share button if Web Share API is supported
+    if (navigator.share) {
+        elements.shareId = document.getElementById('share-id');
+        elements.shareId.classList.remove('hidden');
+    }
 }
 
 // Add CSS classes for notification styling
@@ -870,6 +894,24 @@ elements.clearPeers.addEventListener('click', () => {
     saveRecentPeers();
     updateRecentPeersList();
     elements.recentPeers.classList.add('hidden');
+});
+
+// Add share button click handler
+document.getElementById('share-id').addEventListener('click', async () => {
+    const peerId = elements.peerId.textContent;
+    const shareUrl = `${window.location.origin}${window.location.pathname}?peer=${peerId}`;
+    
+    try {
+        await navigator.share({
+            url: shareUrl
+        });
+        showNotification('Share successful');
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            console.error('Error sharing:', error);
+            showNotification('Failed to share Peer ID', 'error');
+        }
+    }
 });
 
 init();

@@ -143,11 +143,16 @@ function generateQRCode(peerId) {
     try {
         if (!elements.qrcode) return;
         elements.qrcode.innerHTML = ''; // Clear previous QR code
+        
+        // Generate URL with peer ID as query parameter
+        const baseUrl = window.location.origin + window.location.pathname;
+        const qrUrl = `${baseUrl}?peer=${peerId}`;
+        
         new QRCode(elements.qrcode, {
-            text: peerId,
+            text: qrUrl,
             width: 128,
             height: 128,
-            colorDark: '#2563eb',
+            colorDark: '#2196F3',
             colorLight: '#ffffff',
             correctLevel: QRCode.CorrectLevel.H
         });
@@ -155,6 +160,27 @@ function generateQRCode(peerId) {
         console.error('QR Code Generation Error:', error);
     }
 }
+
+// Check URL for peer ID on load
+function checkUrlForPeerId() {
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const peerId = urlParams.get('peer');
+        
+        if (peerId && peerId.length > 0) {
+            elements.remotePeerId.value = peerId;
+            // Wait a bit for PeerJS to initialize
+            setTimeout(() => {
+                elements.connectButton.click();
+            }, 1500);
+        }
+    } catch (error) {
+        console.error('Error parsing URL parameters:', error);
+    }
+}
+
+// Store sent files for later download
+const sentFilesStore = new Map();
 
 // Initialize PeerJS
 function initPeerJS() {
@@ -176,7 +202,12 @@ function initPeerJS() {
         });
 
         peer.on('connection', (conn) => {
-            console.log('Incoming connection');
+            console.log('Incoming connection from:', conn.peer);
+            if (currentConnection) {
+                console.log('Already connected to another peer, closing new connection');
+                conn.close();
+                return;
+            }
             currentConnection = conn;
             updateConnectionStatus('connecting', 'Incoming connection...');
             setupConnectionHandlers(conn);
@@ -184,8 +215,21 @@ function initPeerJS() {
 
         peer.on('error', (error) => {
             console.error('PeerJS Error:', error);
-            updateConnectionStatus('', 'Connection error');
-            showNotification('Connection error: ' + error.type, 'error');
+            let errorMessage = 'Connection error';
+            
+            // Handle specific error types
+            if (error.type === 'peer-unavailable') {
+                errorMessage = 'Peer is not available or does not exist';
+            } else if (error.type === 'network') {
+                errorMessage = 'Network connection error';
+            } else if (error.type === 'disconnected') {
+                errorMessage = 'Disconnected from server';
+            } else if (error.type === 'server-error') {
+                errorMessage = 'Server error occurred';
+            }
+            
+            updateConnectionStatus('', errorMessage);
+            showNotification(errorMessage, 'error');
             resetConnection();
         });
 
@@ -193,8 +237,11 @@ function initPeerJS() {
             console.log('Peer disconnected');
             updateConnectionStatus('', 'Disconnected');
             isConnectionReady = false;
+            
+            // Try to reconnect
             setTimeout(() => {
                 if (peer && peer.disconnected) {
+                    console.log('Attempting to reconnect...');
                     peer.reconnect();
                 }
             }, 3000);
@@ -345,6 +392,9 @@ async function sendFile(file) {
         const chunkSize = 16384; // 16KB chunks
         const totalChunks = Math.ceil(file.size / chunkSize);
 
+        // Store the file for later download
+        sentFilesStore.set(fileId, file);
+
         // Send file header
         currentConnection.send({
             type: 'file-header',
@@ -376,8 +426,8 @@ async function sendFile(file) {
             updateProgress(progress);
         }
 
-        // Add to sent files history
-        addFileToHistory(file, 'sent');
+        // Add to sent files history with the original file
+        addFileToHistory(file, 'sent', URL.createObjectURL(file));
         
         // Clean up
         elements.transferProgress.classList.add('hidden');
@@ -516,27 +566,28 @@ elements.copyId.addEventListener('click', () => {
 });
 
 elements.connectButton.addEventListener('click', () => {
-    const remotePeerId = elements.remotePeerId.value.trim();
-    if (!remotePeerId) {
-        showNotification('Please enter a peer ID', 'error');
+    const remotePeerIdValue = elements.remotePeerId.value.trim();
+    if (!remotePeerIdValue) {
+        showNotification('Please enter a Peer ID', 'error');
         return;
     }
 
-    if (remotePeerId === peer.id) {
-        showNotification('Cannot connect to yourself', 'error');
-        return;
+    if (currentConnection) {
+        console.log('Closing existing connection before creating new one');
+        currentConnection.close();
     }
 
     try {
+        console.log('Attempting to connect to:', remotePeerIdValue);
         updateConnectionStatus('connecting', 'Connecting...');
-        const conn = peer.connect(remotePeerId);
-        currentConnection = conn;
-        setupConnectionHandlers(conn);
+        currentConnection = peer.connect(remotePeerIdValue, {
+            reliable: true
+        });
+        setupConnectionHandlers(currentConnection);
     } catch (error) {
-        console.error('Connection Error:', error);
+        console.error('Connection attempt error:', error);
+        showNotification('Failed to establish connection', 'error');
         updateConnectionStatus('', 'Connection failed');
-        showNotification('Failed to connect to peer', 'error');
-        resetConnection();
     }
 });
 
@@ -592,10 +643,14 @@ function updateProgress(progress) {
 
 // Initialize the application
 function init() {
-    if (!checkBrowserSupport()) return;
-    initIndexedDB();
+    if (!checkBrowserSupport()) {
+        return;
+    }
+
     initPeerJS();
+    initIndexedDB();
     loadRecentPeers();
+    checkUrlForPeerId(); // Check URL for peer ID on load
 }
 
 // Add CSS classes for notification styling
@@ -701,26 +756,27 @@ function updateFilesList(listElement, fileInfo, type) {
     li.appendChild(icon);
     li.appendChild(fileInfoDiv);
 
-    // Add download button for received files
-    if (type === 'received') {
-        const downloadButton = document.createElement('button');
-        downloadButton.className = 'download-button';
-        downloadButton.innerHTML = '<span class="material-icons">download</span>';
-        downloadButton.title = 'Download file';
-        
-        if (fileInfo.url) {
-            downloadButton.addEventListener('click', () => {
-                const a = document.createElement('a');
-                a.href = fileInfo.url;
-                a.download = fileInfo.name;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            });
-        }
-        
-        li.appendChild(downloadButton);
+    // Add download button for both sent and received files
+    const downloadButton = document.createElement('button');
+    downloadButton.className = 'download-button';
+    downloadButton.innerHTML = '<span class="material-icons">download</span>';
+    downloadButton.title = 'Download file';
+
+    if (fileInfo.url) {
+        downloadButton.addEventListener('click', () => {
+            const a = document.createElement('a');
+            a.href = fileInfo.url;
+            a.download = fileInfo.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
+    } else {
+        downloadButton.classList.add('disabled');
+        downloadButton.title = 'File not available for download';
     }
+
+    li.appendChild(downloadButton);
 
     // Insert at the beginning of the list
     listElement.insertBefore(li, listElement.firstChild);

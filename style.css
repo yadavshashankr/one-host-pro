@@ -319,6 +319,16 @@ input[type="file"] {
     background-color: var(--border-color);
 }
 
+.download-button.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: var(--border-color);
+}
+
+.download-button.disabled:hover {
+    background-color: var(--border-color);
+}
+
 /* Recent peers dropdown */
 .recent-peers {
     position: absolute;

@@ -22,7 +22,7 @@ A peer-to-peer file sharing web application that allows direct file transfer bet
 
 ## 🚀 Quick Start
 
-1. Open the application in your browser: [Live Demo](your-demo-url)
+1. Open the application in your browser: [Live Demo](https://yadavshashankr.github.io/local-host/)
 2. You'll see your unique Peer ID
 3. Share your Peer ID with someone you want to connect with
 4. Enter their Peer ID to connect
@@ -124,7 +124,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check [issues page](your-repo-issues-url).
+Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/yadavshashankr/local-host/issues).
 
 ## 🙏 Acknowledgments
 

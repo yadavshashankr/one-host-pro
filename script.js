@@ -520,8 +520,8 @@ async function handleFileComplete(data) {
             throw new Error('Incomplete file transfer');
         }
 
+        // Create the blob from chunks
         const blob = new Blob(fileData.chunks, { type: fileData.type });
-        const url = URL.createObjectURL(blob);
         
         // Create a file object with the received data
         const file = new File([blob], fileData.name, { 
@@ -529,13 +529,10 @@ async function handleFileComplete(data) {
             lastModified: new Date().getTime()
         });
 
-        // Store the blob for iOS devices
-        if (!window.receivedBlobs) {
-            window.receivedBlobs = new Map();
-        }
-        window.receivedBlobs.set(url, blob);
-
-        // Add to history with the URL for downloading
+        // Create and store the blob URL
+        const url = URL.createObjectURL(blob);
+        
+        // Add to history with the blob URL for downloading
         addFileToHistory(file, 'received', url);
         
         // Clean up
@@ -609,7 +606,7 @@ async function sendFileToPeer(file, conn, totalPeers) {
 
             // Read and send file chunks
             let offset = 0;
-            const updateInterval = Math.max(1, Math.floor(file.size / CHUNK_SIZE / 100)); // Update every 1% progress
+            const updateInterval = Math.max(1, Math.floor(file.size / CHUNK_SIZE / 100));
             let lastUpdate = 0;
 
             while (offset < file.size) {
@@ -622,13 +619,11 @@ async function sendFileToPeer(file, conn, totalPeers) {
                 });
                 offset += chunk.byteLength;
                 
-                if (!transferInProgress) break; // Stop if transfer was cancelled
+                if (!transferInProgress) break;
 
-                // Update progress for this peer
                 const peerProgressValue = Math.round((offset / file.size) * 100);
                 peerProgress.set(peerId, peerProgressValue);
 
-                // Calculate and update overall progress less frequently
                 if (offset - lastUpdate >= file.size / 100) {
                     const totalProgress = Math.round(Array.from(peerProgress.values())
                         .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
@@ -636,7 +631,6 @@ async function sendFileToPeer(file, conn, totalPeers) {
                     lastUpdate = offset;
                 }
 
-                // Add a small delay to prevent overwhelming the connection
                 await new Promise(resolve => setTimeout(resolve, 1));
             }
 
@@ -648,10 +642,10 @@ async function sendFileToPeer(file, conn, totalPeers) {
                     size: file.size
                 });
 
-                // Add to sent files history
-                addFileToHistory(file, 'sent', URL.createObjectURL(file));
+                // Add to sent files history (create URL for sender's reference)
+                const url = URL.createObjectURL(file);
+                addFileToHistory(file, 'sent', url);
                 
-                // Update final progress for this peer
                 peerProgress.set(peerId, 100);
                 const finalTotalProgress = Math.round(Array.from(peerProgress.values())
                     .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
@@ -664,7 +658,6 @@ async function sendFileToPeer(file, conn, totalPeers) {
         } catch (error) {
             reject(error);
         } finally {
-            // Clean up progress tracking for this peer
             peerProgress.delete(conn.peer);
         }
     });
@@ -968,17 +961,20 @@ function addFileToHistory(file, type, url = null) {
     if (!fileHistory[type].has(fileId)) {
         fileHistory[type].add(fileId);
         updateFilesList(type === 'sent' ? elements.sentFilesList : elements.receivedFilesList, fileInfo, type);
-    }
 
-    // Send file history update to peer
-    if (connections.size > 0) {
-        for (const [peerId, conn] of connections) {
-            if (conn && conn.open) {
-                conn.send({
-                    type: 'file-history-update',
-                    historyType: type,
-                    fileInfo: fileInfo
-                });
+        // Send file history update to peer with the URL
+        if (type === 'sent' && connections.size > 0) {
+            for (const [peerId, conn] of connections) {
+                if (conn && conn.open) {
+                    conn.send({
+                        type: 'file-history-update',
+                        historyType: type,
+                        fileInfo: {
+                            ...fileInfo,
+                            url: null // Don't send URL to peers
+                        }
+                    });
+                }
             }
         }
     }
@@ -1025,34 +1021,22 @@ function updateFilesList(listElement, fileInfo, type) {
     if (fileInfo.url) {
         downloadButton.addEventListener('click', async () => {
             try {
-                // Get the blob from the URL
-                const response = await fetch(fileInfo.url);
-                const blob = await response.blob();
-                
-                // Create object URL from blob
-                const blobUrl = URL.createObjectURL(blob);
-                
-                // Create temporary link and trigger download
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = blobUrl;
-                a.download = fileInfo.name;
-                document.body.appendChild(a);
-                
                 // For iOS devices
-                if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
-                    a.target = '_blank';
-                    a.click();
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                
+                if (isIOS) {
+                    // iOS requires a different approach
+                    window.location.href = fileInfo.url;
                 } else {
+                    // For other devices
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = fileInfo.url;
+                    a.download = fileInfo.name;
+                    document.body.appendChild(a);
                     a.click();
-                }
-                
-                // Cleanup
-                setTimeout(() => {
                     document.body.removeChild(a);
-                    URL.revokeObjectURL(blobUrl);
-                }, 100);
-                
+                }
             } catch (error) {
                 console.error('Download error:', error);
                 showNotification('Failed to download file', 'error');

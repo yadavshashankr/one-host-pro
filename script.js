@@ -39,6 +39,7 @@ let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
+let peerCount = 0;
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -375,7 +376,11 @@ function setupConnectionHandlers(conn) {
         console.log('Connection opened with:', conn.peer);
         isConnectionReady = true;
         reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-        updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+        
+        // Increment peer count and update status
+        peerCount++;
+        updateConnectionStatus('connected', `Connected to ${peerCount} peer(s)`);
+        
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
         
@@ -400,7 +405,7 @@ function setupConnectionHandlers(conn) {
             if (data.type === 'heartbeat') {
                 return; // Ignore heartbeat messages
             } else if (data.type === 'connection-notification') {
-                updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+                updateConnectionStatus('connected', `Connected to ${peerCount} peer(s)`);
             } else if (data.type === 'file-history-update') {
                 const fileId = data.fileInfo.id;
                 const type = data.historyType === 'sent' ? 'received' : 'sent';
@@ -429,13 +434,12 @@ function setupConnectionHandlers(conn) {
         clearInterval(heartbeat);
         connections.delete(conn.peer);
         
-        // Don't immediately reset if there are other connections
-        if (connections.size > 0) {
-            updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
-            showNotification(`Peer ${conn.peer} disconnected`, 'warning');
+        // Decrement peer count and update status
+        peerCount = Math.max(0, peerCount - 1);
+        if (peerCount > 0) {
+            updateConnectionStatus('connected', `Connected to ${peerCount} peer(s)`);
         } else {
             updateConnectionStatus('', 'Ready to connect');
-            showNotification('All peers disconnected', 'error');
         }
 
         // Attempt to reconnect if page is visible
@@ -788,6 +792,7 @@ function resetConnection() {
         });
         connections.clear();
     }
+    peerCount = 0;
     isConnectionReady = false;
     transferInProgress = false;
     elements.fileTransferSection.classList.add('hidden');
@@ -940,8 +945,8 @@ function updateConnectionStatus(status, message) {
     elements.statusText.textContent = message;
     
     // Update title to show number of connections
-    if (connections && connections.size > 0) {
-        document.title = `(${connections.size}) P2P File Share`;
+    if (peerCount > 0) {
+        document.title = `(${peerCount}) P2P File Share`;
     } else {
         document.title = 'P2P File Share';
     }
@@ -1018,57 +1023,39 @@ function updateFilesList(listElement, fileInfo, type) {
     downloadButton.title = 'Download file';
 
     if (fileInfo.url) {
-        downloadButton.addEventListener('click', () => {
-            // Check if running on iOS
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-            
-            if (isIOS) {
-                // For iOS devices
-                fetch(fileInfo.url)
-                    .then(response => response.blob())
-                    .then(blob => {
-                        const reader = new FileReader();
-                        reader.onload = function() {
-                            const dataUrl = this.result;
-                            
-                            // Create a temporary link
-                            const a = document.createElement('a');
-                            a.style.display = 'none';
-                            a.href = dataUrl;
-                            a.download = fileInfo.name;
-                            
-                            // For iOS Safari/Chrome
-                            if (a.download === undefined) {
-                                a.target = '_blank';
-                            }
-                            
-                            document.body.appendChild(a);
-                            a.click();
-                            
-                            // Cleanup
-                            setTimeout(() => {
-                                document.body.removeChild(a);
-                                window.URL.revokeObjectURL(dataUrl);
-                            }, 100);
-                        };
-                        reader.readAsDataURL(blob);
-                    })
-                    .catch(error => {
-                        console.error('Download error:', error);
-                        showNotification('Failed to download file', 'error');
-                    });
-            } else {
-                // For other devices, use the original method
+        downloadButton.addEventListener('click', async () => {
+            try {
+                // Get the blob from the URL
+                const response = await fetch(fileInfo.url);
+                const blob = await response.blob();
+                
+                // Create object URL from blob
+                const blobUrl = URL.createObjectURL(blob);
+                
+                // Create temporary link and trigger download
                 const a = document.createElement('a');
-                a.href = fileInfo.url;
-                a.download = fileInfo.name;
                 a.style.display = 'none';
+                a.href = blobUrl;
+                a.download = fileInfo.name;
                 document.body.appendChild(a);
-                a.click();
+                
+                // For iOS devices
+                if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
+                    a.target = '_blank';
+                    a.click();
+                } else {
+                    a.click();
+                }
+                
+                // Cleanup
                 setTimeout(() => {
                     document.body.removeChild(a);
-                    window.URL.revokeObjectURL(fileInfo.url);
+                    URL.revokeObjectURL(blobUrl);
                 }, 100);
+                
+            } catch (error) {
+                console.error('Download error:', error);
+                showNotification('Failed to download file', 'error');
             }
         });
     } else {

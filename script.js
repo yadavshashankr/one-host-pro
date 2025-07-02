@@ -491,6 +491,7 @@ async function handleFileChunk(data) {
             fileData.chunks.push(data.data);
             fileData.receivedSize += data.data.byteLength;
             
+            // Ensure integer progress value
             const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
             updateProgress(progress);
         }
@@ -524,6 +525,12 @@ async function handleFileComplete(data) {
             lastModified: new Date().getTime()
         });
 
+        // Store the blob for iOS devices
+        if (!window.receivedBlobs) {
+            window.receivedBlobs = new Map();
+        }
+        window.receivedBlobs.set(url, blob);
+
         // Add to history with the URL for downloading
         addFileToHistory(file, 'received', url);
         
@@ -555,14 +562,15 @@ async function sendFile(file) {
         updateProgress(0);
         elements.transferProgress.classList.remove('hidden');
 
-        // Send to all connected peers
-        for (const [peerId, conn] of connections) {
+        // Send to all connected peers in parallel
+        const sendPromises = Array.from(connections.entries()).map(([peerId, conn]) => {
             if (conn && conn.open) {
-                console.log('Sending file to peer:', peerId);
-                await sendFileToPeer(file, conn);
+                return sendFileToPeer(file, conn, connections.size);
             }
-        }
+            return Promise.resolve();
+        });
 
+        await Promise.all(sendPromises);
         showNotification('File sent successfully to all connected peers', 'success');
     } catch (error) {
         console.error('File send error:', error);
@@ -570,14 +578,22 @@ async function sendFile(file) {
     } finally {
         transferInProgress = false;
         elements.transferProgress.classList.add('hidden');
+        updateProgress(0);
     }
 }
 
+// Track progress for multiple peers
+const peerProgress = new Map();
+
 // New function to handle sending file to a specific peer
-async function sendFileToPeer(file, conn) {
+async function sendFileToPeer(file, conn, totalPeers) {
     return new Promise(async (resolve, reject) => {
         try {
             const fileId = generateFileId(file);
+            const peerId = conn.peer;
+            
+            // Initialize progress for this peer
+            peerProgress.set(peerId, 0);
             
             // Send file header
             conn.send({
@@ -589,6 +605,9 @@ async function sendFileToPeer(file, conn) {
 
             // Read and send file chunks
             let offset = 0;
+            const updateInterval = Math.max(1, Math.floor(file.size / CHUNK_SIZE / 100)); // Update every 1% progress
+            let lastUpdate = 0;
+
             while (offset < file.size) {
                 const chunk = await readFileChunk(file, offset, offset + CHUNK_SIZE);
                 conn.send({
@@ -598,11 +617,23 @@ async function sendFileToPeer(file, conn) {
                     data: chunk
                 });
                 offset += chunk.byteLength;
+                
                 if (!transferInProgress) break; // Stop if transfer was cancelled
-                const progress = Math.round((offset / file.size) * 100);
-                updateProgress(progress);
+
+                // Update progress for this peer
+                const peerProgressValue = Math.round((offset / file.size) * 100);
+                peerProgress.set(peerId, peerProgressValue);
+
+                // Calculate and update overall progress less frequently
+                if (offset - lastUpdate >= file.size / 100) {
+                    const totalProgress = Math.round(Array.from(peerProgress.values())
+                        .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
+                    updateProgress(totalProgress);
+                    lastUpdate = offset;
+                }
+
                 // Add a small delay to prevent overwhelming the connection
-                await new Promise(resolve => setTimeout(resolve, 10));
+                await new Promise(resolve => setTimeout(resolve, 1));
             }
 
             if (transferInProgress) {
@@ -615,12 +646,22 @@ async function sendFileToPeer(file, conn) {
 
                 // Add to sent files history
                 addFileToHistory(file, 'sent', URL.createObjectURL(file));
+                
+                // Update final progress for this peer
+                peerProgress.set(peerId, 100);
+                const finalTotalProgress = Math.round(Array.from(peerProgress.values())
+                    .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
+                updateProgress(finalTotalProgress);
+                
                 resolve();
             } else {
                 reject(new Error('Transfer cancelled'));
             }
         } catch (error) {
             reject(error);
+        } finally {
+            // Clean up progress tracking for this peer
+            peerProgress.delete(conn.peer);
         }
     });
 }
@@ -638,14 +679,20 @@ function readFileChunk(file, start, end) {
 // Update progress bar and text
 function updateProgress(percent) {
     if (!transferInProgress) return;
-    const progress = Math.min(Math.round(percent), 100); // Ensure integer value and cap at 100
-    elements.progress.style.width = `${progress}%`;
-    elements.progressText.textContent = `${progress}%`;
     
-    if (progress > 0 && progress < 100) {
-        elements.transferInfo.style.display = 'block';
-    } else {
-        elements.transferInfo.style.display = 'none';
+    // Ensure integer value and cap at 100
+    const progress = Math.min(Math.round(percent), 100);
+    
+    // Only update if the progress has changed
+    if (elements.progressText.textContent !== `${progress}%`) {
+        elements.progress.style.width = `${progress}%`;
+        elements.progressText.textContent = `${progress}%`;
+        
+        if (progress > 0 && progress < 100) {
+            elements.transferInfo.style.display = 'block';
+        } else {
+            elements.transferInfo.style.display = 'none';
+        }
     }
 }
 
@@ -829,12 +876,6 @@ elements.fileInput.addEventListener('change', (e) => {
     }
 });
 
-// Add a helper function for updating progress
-function updateProgress(progress) {
-    elements.progressText.textContent = `${progress}%`;
-    elements.progress.style.width = `${progress}%`;
-}
-
 // Initialize the application
 function init() {
     if (!checkBrowserSupport()) {
@@ -978,12 +1019,57 @@ function updateFilesList(listElement, fileInfo, type) {
 
     if (fileInfo.url) {
         downloadButton.addEventListener('click', () => {
-            const a = document.createElement('a');
-            a.href = fileInfo.url;
-            a.download = fileInfo.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            // Check if running on iOS
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            
+            if (isIOS) {
+                // For iOS devices
+                fetch(fileInfo.url)
+                    .then(response => response.blob())
+                    .then(blob => {
+                        const reader = new FileReader();
+                        reader.onload = function() {
+                            const dataUrl = this.result;
+                            
+                            // Create a temporary link
+                            const a = document.createElement('a');
+                            a.style.display = 'none';
+                            a.href = dataUrl;
+                            a.download = fileInfo.name;
+                            
+                            // For iOS Safari/Chrome
+                            if (a.download === undefined) {
+                                a.target = '_blank';
+                            }
+                            
+                            document.body.appendChild(a);
+                            a.click();
+                            
+                            // Cleanup
+                            setTimeout(() => {
+                                document.body.removeChild(a);
+                                window.URL.revokeObjectURL(dataUrl);
+                            }, 100);
+                        };
+                        reader.readAsDataURL(blob);
+                    })
+                    .catch(error => {
+                        console.error('Download error:', error);
+                        showNotification('Failed to download file', 'error');
+                    });
+            } else {
+                // For other devices, use the original method
+                const a = document.createElement('a');
+                a.href = fileInfo.url;
+                a.download = fileInfo.name;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(fileInfo.url);
+                }, 100);
+            }
         });
     } else {
         downloadButton.classList.add('disabled');

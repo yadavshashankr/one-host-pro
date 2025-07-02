@@ -8,6 +8,35 @@ const CHUNK_TIMEOUT = 15000; // 15 seconds timeout
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY = 1000; // 1 second between retries
 
+// Constants for file transfer
+const MAX_RETRIES = 3;
+const TRANSFER_STATES = {
+    WAITING: 'waiting',
+    IN_PROGRESS: 'in_progress',
+    COMPLETED: 'completed',
+    FAILED: 'failed'
+};
+
+// Constants for file transfer
+const MAX_FILE_SIZE = 2147483648; // 2GB max file size
+const MIN_CHUNK_SIZE = 8192; // 8KB minimum chunk size
+const CONNECTION_CHECK_INTERVAL = 5000; // 5 seconds
+
+// File type restrictions
+const ALLOWED_FILE_TYPES = new Set([
+    'image/',
+    'video/',
+    'audio/',
+    'text/',
+    'application/pdf',
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/vnd.openxmlformats-officedocument',
+    'application/msword',
+    'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint'
+]);
+
 // DOM Elements
 const elements = {
     peerId: document.getElementById('peer-id'),
@@ -673,87 +702,127 @@ async function handleFileHeader(data) {
     elements.transferProgress.classList.remove('hidden');
 }
 
+// File transfer state management
+const transferState = {
+    state: TRANSFER_STATES.WAITING,
+    currentFile: null,
+    chunks: new Map(),
+    retries: new Map(),
+    progress: 0,
+    activeTransfers: new Set(),
+    pausedTransfers: new Set(),
+    failedChunks: new Map(),
+    connectionChecks: new Map()
+};
+
 // Initialize progress bar
 function initializeProgressBar() {
-    const progressBar = elements.transferProgress.querySelector('.progress-bar');
-    if (progressBar) {
+    const progressBar = document.querySelector('.progress-bar');
+    const progressText = document.querySelector('.progress-text');
+    if (progressBar && progressText) {
         progressBar.style.width = '0%';
-        progressBar.textContent = '0%';
+        progressText.textContent = '0%';
+        elements.transferProgress.classList.remove('hidden');
     }
-    elements.transferProgress.classList.remove('hidden');
 }
 
-// Update progress with debouncing
-const updateProgress = (() => {
-    let timeout;
-    return (progress) => {
-        if (!elements.transferProgress) return;
+// Update progress bar
+function updateProgress(progress) {
+    const progressBar = document.querySelector('.progress-bar');
+    const progressText = document.querySelector('.progress-text');
+    if (progressBar && progressText) {
+        progressBar.style.width = `${progress}%`;
+        progressText.textContent = `${progress}%`;
         
-        clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            const progressBar = elements.transferProgress.querySelector('.progress-bar');
-            if (progressBar) {
-                progressBar.style.width = `${progress}%`;
-                progressBar.textContent = `${progress}%`;
-            }
-            
-            // Show progress bar while transfer is in progress
-            if (progress < 100) {
-                elements.transferProgress.classList.remove('hidden');
-            } else {
-                setTimeout(() => {
-                    elements.transferProgress.classList.add('hidden');
-                }, 1000);
-            }
-        }, 16); // ~60fps
-    };
-})();
+        if (progress >= 100) {
+            setTimeout(() => {
+                elements.transferProgress.classList.add('hidden');
+            }, 1000);
+        }
+    }
+}
 
-// Handle incoming file chunks with retry logic
+// File chunk management
+class FileChunkManager {
+    constructor(file) {
+        this.file = file;
+        this.chunks = new Map();
+        this.totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        this.receivedChunks = 0;
+        this.retries = new Map();
+    }
+
+    addChunk(index, data) {
+        if (!this.chunks.has(index)) {
+            this.chunks.set(index, data);
+            this.receivedChunks++;
+        }
+    }
+
+    isComplete() {
+        return this.receivedChunks === this.totalChunks;
+    }
+
+    getProgress() {
+        return Math.round((this.receivedChunks / this.totalChunks) * 100);
+    }
+
+    async assembleFile() {
+        const chunks = Array.from(this.chunks.values());
+        const blob = new Blob(chunks, { type: this.file.type });
+        return new File([blob], this.file.name, {
+            type: this.file.type,
+            lastModified: new Date().getTime()
+        });
+    }
+}
+
+// Handle incoming file chunks
 async function handleFileChunk(data) {
     try {
+        // Validate chunk data
+        if (!data.data || !data.chunkIndex || data.chunkIndex < 0) {
+            throw new Error('Invalid chunk data');
+        }
+
+        // Verify chunk checksum if provided
+        if (data.checksum) {
+            const chunkChecksum = await calculateChunkChecksum(data.data);
+            if (chunkChecksum !== data.checksum) {
+                throw new Error('Chunk checksum mismatch');
+            }
+        }
+
         const fileId = generateFileId({ name: data.name, size: data.size });
-        
-        // Initialize file data structure
-        if (!fileChunks[fileId]) {
-            fileChunks[fileId] = {
-                name: data.name,
-                size: data.size,
-                type: data.fileType || 'application/octet-stream',
-                chunks: new Array(Math.ceil(data.size / CHUNK_SIZE)),
-                receivedSize: 0,
-                expectedChunks: Math.ceil(data.size / CHUNK_SIZE),
-                missingChunks: new Set()
-            };
-            initializeProgressBar();
+        const fileManager = transferState.chunks.get(fileId);
+
+        if (!fileManager) {
+            throw new Error('No file manager found for chunk');
         }
+
+        // Store chunk and send acknowledgment
+        fileManager.addChunk(data.chunkIndex, data.data);
         
-        const fileData = fileChunks[fileId];
-        
-        // Store chunk at correct index
-        if (!fileData.chunks[data.chunkIndex]) {
-            fileData.chunks[data.chunkIndex] = data.data;
-            fileData.receivedSize += data.data.byteLength;
-            
-            // Calculate and update progress
-            const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
-            updateProgress(progress);
-            
-            // Log progress for debugging
-            console.log(`Receiving ${data.name}: ${progress}% (${fileData.receivedSize}/${fileData.size} bytes)`);
+        if (data.conn) {
+            data.conn.send({
+                type: 'chunk-ack',
+                chunkIndex: data.chunkIndex,
+                received: true
+            });
         }
-        
+
+        // Update progress
+        const progress = fileManager.getProgress();
+        updateProgress(progress);
+
     } catch (error) {
-        console.error('Error handling file chunk:', error);
-        showNotification('Error receiving file chunk. Retrying...', 'warning');
-        
-        // Request missing chunk
-        if (currentTransfer && currentTransfer.conn) {
-            currentTransfer.conn.send({
-                type: 'request-chunk',
-                name: data.name,
-                size: data.size,
-                chunkIndex: data.chunkIndex
+        console.error('Error handling chunk:', error);
+        if (data.conn) {
+            data.conn.send({
+                type: 'chunk-ack',
+                chunkIndex: data.chunkIndex,
+                received: false,
+                error: error.message
             });
         }
     }
@@ -763,43 +832,46 @@ async function handleFileChunk(data) {
 async function handleFileComplete(data) {
     try {
         const fileId = generateFileId({ name: data.name, size: data.size });
-        const fileData = fileChunks[fileId];
-        
-        if (!fileData) {
+        const fileManager = transferState.chunks.get(fileId);
+
+        if (!fileManager) {
             throw new Error('No file data found');
         }
 
-        // Verify all chunks are received
-        const missingChunks = fileData.chunks.findIndex(chunk => !chunk);
-        if (missingChunks !== -1) {
-            throw new Error(`Missing chunks detected. Transfer incomplete.`);
+        if (!fileManager.isComplete()) {
+            throw new Error('Incomplete file transfer');
         }
 
-        // Create blob with correct type
-        const blob = new Blob(fileData.chunks, { type: fileData.type });
+        // Assemble and verify file
+        const file = await fileManager.assembleFile();
         
         // Verify file size
-        if (blob.size !== fileData.size) {
-            throw new Error(`File size mismatch: expected ${fileData.size}, got ${blob.size}`);
+        if (file.size !== data.size) {
+            throw new Error('File size mismatch');
         }
 
-        // Create file object
-        const file = new File([blob], fileData.name, { 
-            type: fileData.type,
-            lastModified: new Date().getTime()
-        });
+        // Verify checksum if provided
+        if (data.checksum) {
+            const fileChecksum = await calculateChecksum(file);
+            if (fileChecksum !== data.checksum) {
+                throw new Error('File checksum mismatch');
+            }
+        }
 
-        // Create blob URL
-        const url = URL.createObjectURL(blob);
-        
-        // Add to download history
+        // Create blob URL and add to history
+        const url = URL.createObjectURL(file);
         addFileToHistory(file, 'received', url);
-        
+
         // Clean up
-        delete fileChunks[fileId];
+        transferState.chunks.delete(fileId);
         showNotification(`File "${file.name}" received successfully`, 'success');
         updateProgress(100);
-        
+
+        // Broadcast file to other peers if we're the host
+        if (peer.id === hostId) {
+            broadcastFile(file, url);
+        }
+
     } catch (error) {
         console.error('Error completing file transfer:', error);
         showNotification(`Error receiving file: ${error.message}`, 'error');
@@ -807,143 +879,20 @@ async function handleFileComplete(data) {
     }
 }
 
-// Send file function
-async function sendFile(file) {
-    if (connections.size === 0) {
-        showNotification('Please connect to at least one peer first', 'error');
-        return;
-    }
-
-    if (transferInProgress) {
-        showNotification('Please wait for the current transfer to complete', 'warning');
-        return;
-    }
-
-    try {
-        transferInProgress = true;
-        updateProgress(0);
-        elements.transferProgress.classList.remove('hidden');
-
-        // Send to all connected peers in parallel
-        const sendPromises = Array.from(connections.entries()).map(([peerId, conn]) => {
-            if (conn && conn.open) {
-                return sendFileToPeer(file, conn, connections.size);
+// Broadcast file to all peers
+async function broadcastFile(file, url) {
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open && peerId !== peer.id) {
+            try {
+                await sendFileToPeer(file, conn);
+            } catch (error) {
+                console.error(`Error broadcasting file to peer ${peerId}:`, error);
             }
-            return Promise.resolve();
-        });
-
-        await Promise.all(sendPromises);
-        showNotification('File sent successfully to all connected peers', 'success');
-    } catch (error) {
-        console.error('File send error:', error);
-        showNotification('Failed to send file', 'error');
-    } finally {
-        transferInProgress = false;
-        elements.transferProgress.classList.add('hidden');
-        updateProgress(0);
-    }
-}
-
-// Track progress for multiple peers
-const peerProgress = new Map();
-
-// Improved file sending with retry logic
-async function sendFileToPeer(file, conn, totalPeers) {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const peerId = conn.peer;
-            currentTransfer = { file, conn, peerId };
-            
-            initializeProgressBar();
-            peerProgress.set(peerId, 0);
-            
-            // Send file header
-            conn.send({
-                type: 'file-header',
-                name: file.name,
-                size: file.size,
-                fileType: file.type || 'application/octet-stream',
-                totalChunks: Math.ceil(file.size / CHUNK_SIZE),
-                chunkSize: CHUNK_SIZE
-            });
-
-            // Send chunks with retry logic
-            let offset = 0;
-            let chunkIndex = 0;
-            
-            while (offset < file.size) {
-                if (!transferInProgress) {
-                    throw new Error('Transfer cancelled');
-                }
-
-                let success = false;
-                let attempts = 0;
-                
-                while (!success && attempts < RETRY_ATTEMPTS) {
-                    try {
-                        const chunk = await readFileChunk(file, offset, Math.min(offset + CHUNK_SIZE, file.size));
-                        
-                        conn.send({
-                            type: 'file-chunk',
-                            name: file.name,
-                            size: file.size,
-                            chunkIndex: chunkIndex,
-                            data: chunk,
-                            offset: offset
-                        });
-                        
-                        success = true;
-                    } catch (error) {
-                        attempts++;
-                        if (attempts >= RETRY_ATTEMPTS) {
-                            throw new Error(`Failed to send chunk ${chunkIndex} after ${RETRY_ATTEMPTS} attempts`);
-                        }
-                        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-                    }
-                }
-
-                offset += CHUNK_SIZE;
-                chunkIndex++;
-
-                // Update progress
-                const progress = Math.round((offset / file.size) * 100);
-                peerProgress.set(peerId, progress);
-                
-                const totalProgress = Math.round(Array.from(peerProgress.values())
-                    .reduce((sum, p) => sum + p, 0) / (totalPeers * 100) * 100);
-                updateProgress(totalProgress);
-
-                // Small delay between chunks
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-
-            // Send completion message
-            conn.send({
-                type: 'file-complete',
-                name: file.name,
-                size: file.size,
-                totalChunks: chunkIndex
-            });
-
-            // Create URL for sender's reference
-            const url = URL.createObjectURL(file);
-            addFileToHistory(file, 'sent', url);
-            
-            updateProgress(100);
-            resolve();
-            
-        } catch (error) {
-            console.error('Error sending file:', error);
-            showNotification(`Error sending file: ${error.message}`, 'error');
-            reject(error);
-        } finally {
-            peerProgress.delete(conn.peer);
-            currentTransfer = null;
         }
-    });
+    }
 }
 
-// Helper function to read file chunks with timeout and retry
+// Read file chunk with timeout
 async function readFileChunk(file, start, end) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -1227,6 +1176,10 @@ function updateFilesList(listElement, fileInfo, type) {
 
     const li = document.createElement('li');
     li.dataset.fileId = fileInfo.id;
+    li.className = 'file-item';
+
+    const fileContent = document.createElement('div');
+    fileContent.className = 'file-content';
 
     const icon = document.createElement('span');
     icon.className = 'material-icons';
@@ -1246,8 +1199,9 @@ function updateFilesList(listElement, fileInfo, type) {
     fileInfoDiv.appendChild(fileName);
     fileInfoDiv.appendChild(fileSize);
 
-    li.appendChild(icon);
-    li.appendChild(fileInfoDiv);
+    fileContent.appendChild(icon);
+    fileContent.appendChild(fileInfoDiv);
+    li.appendChild(fileContent);
 
     if (fileInfo.url) {
         const downloadButton = document.createElement('button');
@@ -1257,21 +1211,18 @@ function updateFilesList(listElement, fileInfo, type) {
 
         downloadButton.addEventListener('click', async () => {
             try {
-                // Create a temporary anchor element
                 const a = document.createElement('a');
                 a.href = fileInfo.url;
-                a.download = fileInfo.name; // Set the download filename
-                
-                // Force download in new tab/window
+                a.download = fileInfo.name;
                 a.target = '_blank';
                 a.rel = 'noopener noreferrer';
-                
+
                 // For iOS devices
                 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
                 if (isIOS) {
                     window.open(fileInfo.url, '_blank');
                 } else {
-                    // Trigger download
+                    // For other devices
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
@@ -1343,5 +1294,283 @@ document.getElementById('share-id').addEventListener('click', async () => {
         }
     }
 });
+
+// Validate file before transfer
+function validateFile(file) {
+    // Check file size
+    if (file.size > MAX_FILE_SIZE) {
+        throw new Error(`File size exceeds maximum limit of ${formatFileSize(MAX_FILE_SIZE)}`);
+    }
+
+    // Check file type
+    const fileType = file.type.toLowerCase();
+    const isAllowed = Array.from(ALLOWED_FILE_TYPES).some(type => fileType.startsWith(type));
+    if (!isAllowed && file.type !== '') {  // Allow files with no type (some text files)
+        throw new Error('File type not allowed');
+    }
+
+    // Check for zero-byte files
+    if (file.size === 0) {
+        throw new Error('Cannot transfer empty files');
+    }
+
+    return true;
+}
+
+// Enhanced connection management
+function setupConnectionMonitoring(conn) {
+    // Setup heartbeat
+    const heartbeatInterval = setInterval(() => {
+        if (conn.open) {
+            conn.send({ type: 'heartbeat' });
+        }
+    }, CONNECTION_CHECK_INTERVAL);
+
+    // Track last activity
+    let lastActivity = Date.now();
+    conn.on('data', () => {
+        lastActivity = Date.now();
+    });
+
+    // Monitor connection health
+    const healthCheck = setInterval(() => {
+        if (Date.now() - lastActivity > CONNECTION_CHECK_INTERVAL * 2) {
+            // Connection might be stale
+            handleConnectionIssue(conn);
+        }
+    }, CONNECTION_CHECK_INTERVAL);
+
+    // Store intervals for cleanup
+    transferState.connectionChecks.set(conn.peer, {
+        heartbeat: heartbeatInterval,
+        health: healthCheck
+    });
+
+    // Cleanup on connection close
+    conn.on('close', () => {
+        clearConnectionMonitoring(conn.peer);
+    });
+}
+
+// Clear connection monitoring
+function clearConnectionMonitoring(peerId) {
+    const checks = transferState.connectionChecks.get(peerId);
+    if (checks) {
+        clearInterval(checks.heartbeat);
+        clearInterval(checks.health);
+        transferState.connectionChecks.delete(peerId);
+    }
+}
+
+// Handle connection issues
+async function handleConnectionIssue(conn) {
+    const peerId = conn.peer;
+    console.warn(`Connection issues detected with peer ${peerId}`);
+
+    // Pause any active transfers
+    if (transferState.activeTransfers.has(peerId)) {
+        pauseTransfer(peerId);
+    }
+
+    // Try to reconnect
+    try {
+        await reconnectToPeer(peerId);
+    } catch (error) {
+        console.error(`Failed to reconnect to peer ${peerId}:`, error);
+        handleTransferFailure(peerId);
+    }
+}
+
+// Pause transfer
+function pauseTransfer(peerId) {
+    transferState.activeTransfers.delete(peerId);
+    transferState.pausedTransfers.add(peerId);
+    showNotification(`Transfer paused for peer ${peerId}`, 'warning');
+}
+
+// Resume transfer
+async function resumeTransfer(peerId) {
+    if (!transferState.pausedTransfers.has(peerId)) return;
+
+    const conn = connections.get(peerId);
+    if (!conn || !conn.open) {
+        showNotification(`Cannot resume transfer: peer ${peerId} not connected`, 'error');
+        return;
+    }
+
+    transferState.pausedTransfers.delete(peerId);
+    transferState.activeTransfers.add(peerId);
+
+    // Resend failed chunks
+    const failedChunks = transferState.failedChunks.get(peerId) || new Set();
+    for (const chunkIndex of failedChunks) {
+        try {
+            await sendChunk(conn, transferState.currentFile, chunkIndex);
+        } catch (error) {
+            console.error(`Failed to resend chunk ${chunkIndex}:`, error);
+        }
+    }
+}
+
+// Enhanced file sending with chunk management
+async function sendFileToPeer(file, conn) {
+    try {
+        // Validate file first
+        validateFile(file);
+
+        const peerId = conn.peer;
+        transferState.activeTransfers.add(peerId);
+        transferState.currentFile = file;
+
+        // Setup connection monitoring
+        setupConnectionMonitoring(conn);
+
+        // Initialize chunk tracking
+        transferState.failedChunks.set(peerId, new Set());
+
+        // Send file header with metadata
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        conn.send({
+            type: 'file-header',
+            name: file.name,
+            size: file.size,
+            fileType: file.type || 'application/octet-stream',
+            totalChunks: totalChunks,
+            id: generateFileId(file),
+            timestamp: Date.now()
+        });
+
+        // Send chunks with enhanced error handling
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+            if (!transferState.activeTransfers.has(peerId)) {
+                throw new Error('Transfer interrupted');
+            }
+
+            try {
+                await sendChunk(conn, file, chunkIndex);
+            } catch (error) {
+                transferState.failedChunks.get(peerId).add(chunkIndex);
+                if (transferState.failedChunks.get(peerId).size > totalChunks * 0.1) {
+                    // If more than 10% chunks failed, pause transfer
+                    pauseTransfer(peerId);
+                    throw new Error('Too many failed chunks');
+                }
+            }
+        }
+
+        // Verify transfer completion
+        const verificationResult = await verifyTransfer(conn, file);
+        if (!verificationResult.success) {
+            throw new Error(`Transfer verification failed: ${verificationResult.reason}`);
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            name: file.name,
+            size: file.size,
+            id: generateFileId(file),
+            checksum: await calculateChecksum(file)
+        });
+
+        // Cleanup
+        transferState.activeTransfers.delete(peerId);
+        transferState.failedChunks.delete(peerId);
+
+    } catch (error) {
+        handleTransferFailure(conn.peer, error);
+        throw error;
+    }
+}
+
+// Send individual chunk with retry logic
+async function sendChunk(conn, file, chunkIndex) {
+    let attempts = 0;
+    while (attempts < MAX_RETRIES) {
+        try {
+            const start = chunkIndex * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = await readFileChunk(file, start, end);
+
+            conn.send({
+                type: 'file-chunk',
+                name: file.name,
+                size: file.size,
+                chunkIndex: chunkIndex,
+                data: chunk,
+                checksum: await calculateChunkChecksum(chunk)
+            });
+
+            // Wait for acknowledgment
+            const ackReceived = await waitForAck(conn, chunkIndex);
+            if (ackReceived) return;
+
+            throw new Error('Chunk acknowledgment timeout');
+        } catch (error) {
+            attempts++;
+            if (attempts >= MAX_RETRIES) throw error;
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempts));
+        }
+    }
+}
+
+// Calculate file checksum
+async function calculateChecksum(file) {
+    try {
+        const buffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+        return Array.from(new Uint8Array(hashBuffer))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    } catch (error) {
+        console.error('Error calculating checksum:', error);
+        return null;
+    }
+}
+
+// Calculate chunk checksum
+async function calculateChunkChecksum(chunk) {
+    try {
+        const hashBuffer = await crypto.subtle.digest('SHA-256', chunk);
+        return Array.from(new Uint8Array(hashBuffer))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    } catch (error) {
+        console.error('Error calculating chunk checksum:', error);
+        return null;
+    }
+}
+
+// Verify complete transfer
+async function verifyTransfer(conn, file) {
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            resolve({ success: false, reason: 'Verification timeout' });
+        }, CHUNK_TIMEOUT);
+
+        conn.send({
+            type: 'verify-transfer',
+            fileId: generateFileId(file)
+        });
+
+        const handler = (data) => {
+            if (data.type === 'transfer-verification' && data.fileId === generateFileId(file)) {
+                clearTimeout(timeout);
+                conn.off('data', handler);
+                resolve({ success: data.success, reason: data.reason });
+            }
+        };
+
+        conn.on('data', handler);
+    });
+}
+
+// Handle transfer failure
+function handleTransferFailure(peerId, error) {
+    console.error(`Transfer failed for peer ${peerId}:`, error);
+    transferState.activeTransfers.delete(peerId);
+    transferState.pausedTransfers.delete(peerId);
+    showNotification(`Transfer failed: ${error.message}`, 'error');
+}
 
 init();

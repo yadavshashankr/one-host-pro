@@ -191,9 +191,20 @@ function checkUrlForPeerId() {
             setTimeout(() => {
                 elements.connectButton.click();
             }, 1500);
+        } else {
+            // Clear the remote peer ID field if no peer ID in URL
+            elements.remotePeerId.value = '';
+        }
+
+        // Clear the URL parameters after processing
+        if (window.history && window.history.replaceState) {
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, newUrl);
         }
     } catch (error) {
         console.error('Error parsing URL parameters:', error);
+        // Clear the field in case of error
+        elements.remotePeerId.value = '';
     }
 }
 
@@ -210,6 +221,13 @@ function initPeerJS() {
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' }
                 ]
+            },
+            // Add configuration to improve connection stability
+            pingInterval: 5000, // Ping every 5 seconds
+            retryTimers: {
+                min: 1000,   // Start retry after 1 second
+                max: 15000,  // Max retry interval of 15 seconds
+                factor: 1.5  // Multiply interval by this factor each attempt
             }
         });
 
@@ -235,34 +253,119 @@ function initPeerJS() {
                 errorMessage = 'Peer is not available or does not exist';
             } else if (error.type === 'network') {
                 errorMessage = 'Network connection error';
+                attemptReconnect();
             } else if (error.type === 'disconnected') {
                 errorMessage = 'Disconnected from server';
+                attemptReconnect();
             } else if (error.type === 'server-error') {
                 errorMessage = 'Server error occurred';
+                attemptReconnect();
             }
             
             updateConnectionStatus('', errorMessage);
             showNotification(errorMessage, 'error');
-            resetConnection();
         });
 
         peer.on('disconnected', () => {
             console.log('Peer disconnected');
-            updateConnectionStatus('', 'Disconnected');
-            isConnectionReady = false;
-            
-            // Try to reconnect
-            setTimeout(() => {
-                if (peer && peer.disconnected) {
-                    console.log('Attempting to reconnect...');
-                    peer.reconnect();
-                }
-            }, 3000);
+            updateConnectionStatus('', 'Disconnected - Attempting to reconnect...');
+            attemptReconnect();
         });
+
+        // Add visibility change handler
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        
+        // Add online/offline handlers
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
     } catch (error) {
         console.error('PeerJS Initialization Error:', error);
         updateConnectionStatus('', 'Initialization failed');
         showNotification('Failed to initialize peer connection', 'error');
+    }
+}
+
+// Handle visibility change (sleep/wake)
+function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+        console.log('Page became visible - checking connections');
+        checkAndRestoreConnections();
+    }
+}
+
+// Handle online event
+function handleOnline() {
+    console.log('Network connection restored');
+    checkAndRestoreConnections();
+}
+
+// Handle offline event
+function handleOffline() {
+    console.log('Network connection lost');
+    updateConnectionStatus('', 'Network connection lost - Will reconnect when online');
+}
+
+// Check and restore connections
+async function checkAndRestoreConnections() {
+    if (!peer || peer.disconnected) {
+        console.log('Attempting to reconnect peer...');
+        attemptReconnect();
+        return;
+    }
+
+    // Check each connection
+    for (const [peerId, conn] of connections.entries()) {
+        if (!conn.open) {
+            console.log(`Connection to ${peerId} is closed - attempting to reconnect...`);
+            try {
+                const newConn = peer.connect(peerId, {
+                    reliable: true,
+                    serialization: 'json'
+                });
+                setupConnectionHandlers(newConn);
+                connections.set(peerId, newConn);
+            } catch (error) {
+                console.error(`Failed to reconnect to ${peerId}:`, error);
+            }
+        }
+    }
+
+    updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+        connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Ready to connect');
+}
+
+// Attempt to reconnect with exponential backoff
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const INITIAL_RECONNECT_DELAY = 1000;
+
+async function attemptReconnect() {
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.log('Max reconnection attempts reached');
+        showNotification('Unable to reconnect. Please refresh the page.', 'error');
+        return;
+    }
+
+    const delay = INITIAL_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
+    reconnectAttempts++;
+
+    console.log(`Attempting to reconnect (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+    
+    try {
+        if (peer) {
+            if (peer.disconnected) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+                peer.reconnect();
+            }
+        } else {
+            initPeerJS();
+        }
+    } catch (error) {
+        console.error('Reconnection attempt failed:', error);
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            setTimeout(attemptReconnect, delay);
+        }
     }
 }
 
@@ -271,6 +374,7 @@ function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
         isConnectionReady = true;
+        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
         updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
@@ -282,9 +386,20 @@ function setupConnectionHandlers(conn) {
         });
     });
 
+    // Add heartbeat to keep connection alive
+    const heartbeat = setInterval(() => {
+        if (conn.open) {
+            conn.send({ type: 'heartbeat' });
+        } else {
+            clearInterval(heartbeat);
+        }
+    }, 30000); // Send heartbeat every 30 seconds
+
     conn.on('data', async (data) => {
         try {
-            if (data.type === 'connection-notification') {
+            if (data.type === 'heartbeat') {
+                return; // Ignore heartbeat messages
+            } else if (data.type === 'connection-notification') {
                 updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
             } else if (data.type === 'file-history-update') {
                 const fileId = data.fileInfo.id;
@@ -311,21 +426,40 @@ function setupConnectionHandlers(conn) {
 
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
+        clearInterval(heartbeat);
         connections.delete(conn.peer);
-        updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected');
-        if (connections.size === 0) {
-            showNotification('All peers disconnected', 'error');
-        } else {
+        
+        // Don't immediately reset if there are other connections
+        if (connections.size > 0) {
+            updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
             showNotification(`Peer ${conn.peer} disconnected`, 'warning');
+        } else {
+            updateConnectionStatus('', 'Ready to connect');
+            showNotification('All peers disconnected', 'error');
+        }
+
+        // Attempt to reconnect if page is visible
+        if (document.visibilityState === 'visible') {
+            setTimeout(() => {
+                if (!connections.has(conn.peer)) {
+                    console.log('Attempting to reconnect to:', conn.peer);
+                    const newConn = peer.connect(conn.peer, {
+                        reliable: true,
+                        serialization: 'json'
+                    });
+                    setupConnectionHandlers(newConn);
+                    connections.set(conn.peer, newConn);
+                }
+            }, 1000);
         }
     });
 
     conn.on('error', (error) => {
-        console.error('Connection Error:', error);
-        updateConnectionStatus('', 'Connection error');
-        showNotification('Connection error occurred', 'error');
-        resetConnection();
+        console.error('Connection error:', error);
+        // Only attempt reconnect if the page is visible
+        if (document.visibilityState === 'visible') {
+            checkAndRestoreConnections();
+        }
     });
 }
 
@@ -357,7 +491,7 @@ async function handleFileChunk(data) {
             fileData.chunks.push(data.data);
             fileData.receivedSize += data.data.byteLength;
             
-            const progress = Math.floor((fileData.receivedSize / fileData.size) * 100);
+            const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
             updateProgress(progress);
         }
     } catch (error) {
@@ -465,7 +599,8 @@ async function sendFileToPeer(file, conn) {
                 });
                 offset += chunk.byteLength;
                 if (!transferInProgress) break; // Stop if transfer was cancelled
-                updateProgress((offset / file.size) * 100);
+                const progress = Math.round((offset / file.size) * 100);
+                updateProgress(progress);
                 // Add a small delay to prevent overwhelming the connection
                 await new Promise(resolve => setTimeout(resolve, 10));
             }
@@ -503,7 +638,7 @@ function readFileChunk(file, start, end) {
 // Update progress bar and text
 function updateProgress(percent) {
     if (!transferInProgress) return;
-    const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
+    const progress = Math.min(Math.round(percent), 100); // Ensure integer value and cap at 100
     elements.progress.style.width = `${progress}%`;
     elements.progressText.textContent = `${progress}%`;
     
@@ -706,6 +841,9 @@ function init() {
         return;
     }
 
+    // Clear any existing value in the remote peer ID field
+    elements.remotePeerId.value = '';
+    
     initPeerJS();
     initIndexedDB();
     loadRecentPeers();

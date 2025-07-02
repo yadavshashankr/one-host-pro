@@ -125,9 +125,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/yadavshashankr/local-host/issues).
-
-## 🙏 Acknowledgments
-
-- [PeerJS](https://peerjs.com/) for WebRTC implementation
-- [Material Icons](https://material.io/icons/) for UI icons
-- [QRCode.js](https://davidshimjs.github.io/qrcodejs/) for QR code generation 

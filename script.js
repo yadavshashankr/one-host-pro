@@ -217,6 +217,188 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
+// Add global file history management
+const globalFileHistory = new Map();
+
+// Broadcast file info to all peers
+function broadcastFileInfo(fileInfo, type) {
+    // Don't broadcast if we're not the host
+    if (!peer || !peer.id || peer.id !== hostId) return;
+    
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open) {
+            conn.send({
+                type: 'file-broadcast',
+                fileInfo: {
+                    ...fileInfo,
+                    originalSender: peer.id
+                },
+                historyType: type
+            });
+        }
+    }
+}
+
+// Handle file broadcast reception
+function handleFileBroadcast(data) {
+    const { fileInfo, historyType } = data;
+    
+    // Add to global file history if not exists
+    const fileId = fileInfo.id;
+    if (!globalFileHistory.has(fileId)) {
+        globalFileHistory.set(fileId, {
+            ...fileInfo,
+            type: historyType
+        });
+        
+        // Update UI for the broadcasted file
+        updateFilesList(
+            historyType === 'sent' ? elements.sentFilesList : elements.receivedFilesList,
+            fileInfo,
+            historyType
+        );
+    }
+}
+
+// Update addFileToHistory to broadcast files
+function addFileToHistory(file, type, url = null) {
+    const fileId = generateFileId(file);
+    const fileInfo = {
+        id: fileId,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        timestamp: new Date().toISOString(),
+        url: url
+    };
+
+    // Add to local history if not exists
+    if (!fileHistory[type].has(fileId)) {
+        fileHistory[type].add(fileId);
+        updateFilesList(
+            type === 'sent' ? elements.sentFilesList : elements.receivedFilesList,
+            fileInfo,
+            type
+        );
+
+        // Add to global history
+        globalFileHistory.set(fileId, {
+            ...fileInfo,
+            type: type
+        });
+
+        // Broadcast file info to all peers
+        broadcastFileInfo(fileInfo, type);
+    }
+}
+
+// Update connection handler to include file broadcast handling
+function handleConnection(conn) {
+    connections.set(conn.peer, conn);
+    updatePeerCount();
+
+    conn.on('data', async (data) => {
+        try {
+            switch (data.type) {
+                case 'file-header':
+                    // ... existing code ...
+                    break;
+                case 'file-chunk':
+                    await handleFileChunk(data);
+                    break;
+                case 'file-complete':
+                    await handleFileComplete(data);
+                    break;
+                case 'file-broadcast':
+                    handleFileBroadcast(data);
+                    break;
+                case 'request-chunk':
+                    // Handle chunk request
+                    if (currentTransfer && currentTransfer.file) {
+                        const { file } = currentTransfer;
+                        const start = data.chunkIndex * CHUNK_SIZE;
+                        const end = Math.min(start + CHUNK_SIZE, file.size);
+                        const chunk = await readFileChunk(file, start, end);
+                        
+                        conn.send({
+                            type: 'file-chunk',
+                            name: file.name,
+                            size: file.size,
+                            chunkIndex: data.chunkIndex,
+                            data: chunk,
+                            offset: start
+                        });
+                    }
+                    break;
+            }
+        } catch (error) {
+            console.error('Error handling data:', error);
+            showNotification('Error processing received data', 'error');
+        }
+    });
+
+    // Send existing file history to new peer
+    if (peer.id === hostId) {
+        globalFileHistory.forEach((fileInfo, fileId) => {
+            conn.send({
+                type: 'file-broadcast',
+                fileInfo: fileInfo,
+                historyType: fileInfo.type
+            });
+        });
+    }
+
+    conn.on('close', () => {
+        connections.delete(conn.peer);
+        updatePeerCount();
+    });
+}
+
+// Update peer initialization to handle host status
+let hostId = null;
+
+function initializePeer() {
+    peer = new Peer(generatePeerId(), peerConfig);
+
+    peer.on('open', (id) => {
+        elements.peerId.value = id;
+        showNotification('Your peer ID is: ' + id, 'info');
+        
+        // If we're the first peer, we're the host
+        if (!hostId) {
+            hostId = id;
+        }
+    });
+
+    peer.on('connection', handleConnection);
+
+    peer.on('error', (error) => {
+        console.error('Peer error:', error);
+        showNotification('Connection error: ' + error.message, 'error');
+    });
+}
+
+// Update connect function to handle host discovery
+async function connect(targetPeerId) {
+    try {
+        const conn = peer.connect(targetPeerId);
+        
+        conn.on('open', () => {
+            handleConnection(conn);
+            showNotification('Connected to peer: ' + targetPeerId, 'success');
+            
+            // Store host ID when connecting
+            if (!hostId) {
+                hostId = targetPeerId;
+            }
+        });
+        
+    } catch (error) {
+        console.error('Connection error:', error);
+        showNotification('Failed to connect: ' + error.message, 'error');
+    }
+}
+
 // Initialize PeerJS
 function initPeerJS() {
     try {
@@ -1035,41 +1217,6 @@ function updateConnectionStatus(status, message) {
         document.title = `(${peerCount}) P2P File Share`;
     } else {
         document.title = 'P2P File Share';
-    }
-}
-
-// Update file history management
-function addFileToHistory(file, type, url = null) {
-    const fileId = generateFileId(file);
-    const fileInfo = {
-        id: fileId,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        timestamp: new Date().toISOString(),
-        url: url
-    };
-
-    // Check if file already exists in history
-    if (!fileHistory[type].has(fileId)) {
-        fileHistory[type].add(fileId);
-        updateFilesList(type === 'sent' ? elements.sentFilesList : elements.receivedFilesList, fileInfo, type);
-
-        // Send file history update to peer with the URL
-        if (type === 'sent' && connections.size > 0) {
-            for (const [peerId, conn] of connections) {
-                if (conn && conn.open) {
-                    conn.send({
-                        type: 'file-history-update',
-                        historyType: type,
-                        fileInfo: {
-                            ...fileInfo,
-                            url: null // Don't send URL to peers
-                        }
-                    });
-                }
-            }
-        }
     }
 }
 

@@ -3,6 +3,8 @@ const CHUNK_SIZE = 16384; // 16KB chunks
 const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
+const MAX_CHUNK_RETRIES = 3;
+const CHUNK_TIMEOUT = 10000; // 10 seconds timeout for each chunk
 
 // DOM Elements
 const elements = {
@@ -490,18 +492,37 @@ async function handleFileHeader(data) {
 async function handleFileChunk(data) {
     try {
         const fileId = generateFileId({ name: data.name, size: data.size });
-        const fileData = fileChunks[fileId];
-        if (fileData) {
-            fileData.chunks.push(data.data);
-            fileData.receivedSize += data.data.byteLength;
-            
-            // Ensure integer progress value
-            const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
-            updateProgress(progress);
+        
+        // Initialize file data if not exists
+        if (!fileChunks[fileId]) {
+            fileChunks[fileId] = {
+                name: data.name,
+                size: data.size,
+                type: data.fileType || 'application/octet-stream',
+                chunks: [],
+                receivedSize: 0,
+                expectedChunks: Math.ceil(data.size / CHUNK_SIZE)
+            };
+            // Show progress bar at start
+            elements.transferProgress.classList.remove('hidden');
         }
+        
+        const fileData = fileChunks[fileId];
+        
+        // Store chunk data
+        fileData.chunks.push(data.data);
+        fileData.receivedSize += data.data.byteLength;
+        
+        // Calculate and update progress
+        const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
+        updateProgress(progress);
+        
+        // Log progress for debugging
+        console.log(`Receiving ${data.name}: ${progress}% (${fileData.receivedSize}/${fileData.size} bytes)`);
+        
     } catch (error) {
         console.error('Error handling file chunk:', error);
-        showNotification('Error processing file chunk', 'error');
+        showNotification('Error receiving file chunk', 'error');
     }
 }
 
@@ -510,38 +531,44 @@ async function handleFileComplete(data) {
     try {
         const fileId = generateFileId({ name: data.name, size: data.size });
         const fileData = fileChunks[fileId];
+        
         if (!fileData) {
-            console.error('No file data found for:', data.name);
-            return;
+            throw new Error('No file data found');
         }
 
-        // Verify if we received all the data
+        // Verify file completeness
         if (fileData.receivedSize !== fileData.size) {
-            throw new Error('Incomplete file transfer');
+            throw new Error(`Incomplete file transfer: received ${fileData.receivedSize} of ${fileData.size} bytes`);
         }
 
-        // Create the blob from chunks
+        // Create blob with correct type
         const blob = new Blob(fileData.chunks, { type: fileData.type });
         
-        // Create a file object with the received data
+        // Verify blob size
+        if (blob.size !== fileData.size) {
+            throw new Error(`Blob size mismatch: expected ${fileData.size}, got ${blob.size}`);
+        }
+
+        // Create file object
         const file = new File([blob], fileData.name, { 
             type: fileData.type,
             lastModified: new Date().getTime()
         });
 
-        // Create and store the blob URL
+        // Create and store blob URL
         const url = URL.createObjectURL(blob);
-        
-        // Add to history with the blob URL for downloading
         addFileToHistory(file, 'received', url);
         
         // Clean up
         delete fileChunks[fileId];
-        elements.transferProgress.classList.add('hidden');
         showNotification(`File "${file.name}" received successfully`, 'success');
+        
+        // Ensure progress bar shows 100% briefly before hiding
+        updateProgress(100);
+        
     } catch (error) {
         console.error('Error completing file transfer:', error);
-        showNotification('Error processing received file', 'error');
+        showNotification(`Error receiving file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
     }
 }
@@ -593,69 +620,77 @@ async function sendFileToPeer(file, conn, totalPeers) {
             const fileId = generateFileId(file);
             const peerId = conn.peer;
             
-            // Initialize progress for this peer
+            // Show progress bar at start
+            elements.transferProgress.classList.remove('hidden');
             peerProgress.set(peerId, 0);
             
-            // Send file header
+            // Send file header with more metadata
             conn.send({
                 type: 'file-header',
                 name: file.name,
                 size: file.size,
-                fileType: file.type || 'application/octet-stream'
+                fileType: file.type || 'application/octet-stream',
+                totalChunks: Math.ceil(file.size / CHUNK_SIZE),
+                chunkSize: CHUNK_SIZE
             });
 
-            // Read and send file chunks
+            // Read and send file chunks with verification
             let offset = 0;
-            const updateInterval = Math.max(1, Math.floor(file.size / CHUNK_SIZE / 100));
-            let lastUpdate = 0;
-
+            let chunkIndex = 0;
+            
             while (offset < file.size) {
-                const chunk = await readFileChunk(file, offset, offset + CHUNK_SIZE);
+                if (!transferInProgress) {
+                    throw new Error('Transfer cancelled');
+                }
+
+                const chunk = await readFileChunk(file, offset, Math.min(offset + CHUNK_SIZE, file.size));
+                
+                // Send chunk with metadata
                 conn.send({
                     type: 'file-chunk',
                     name: file.name,
                     size: file.size,
-                    data: chunk
+                    chunkIndex: chunkIndex,
+                    data: chunk,
+                    offset: offset
                 });
-                offset += chunk.byteLength;
-                
-                if (!transferInProgress) break;
 
+                offset += chunk.byteLength;
+                chunkIndex++;
+
+                // Update progress
                 const peerProgressValue = Math.round((offset / file.size) * 100);
                 peerProgress.set(peerId, peerProgressValue);
-
-                if (offset - lastUpdate >= file.size / 100) {
-                    const totalProgress = Math.round(Array.from(peerProgress.values())
-                        .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
-                    updateProgress(totalProgress);
-                    lastUpdate = offset;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 1));
-            }
-
-            if (transferInProgress) {
-                // Send completion message
-                conn.send({
-                    type: 'file-complete',
-                    name: file.name,
-                    size: file.size
-                });
-
-                // Add to sent files history (create URL for sender's reference)
-                const url = URL.createObjectURL(file);
-                addFileToHistory(file, 'sent', url);
                 
-                peerProgress.set(peerId, 100);
-                const finalTotalProgress = Math.round(Array.from(peerProgress.values())
+                // Update overall progress
+                const totalProgress = Math.round(Array.from(peerProgress.values())
                     .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
-                updateProgress(finalTotalProgress);
-                
-                resolve();
-            } else {
-                reject(new Error('Transfer cancelled'));
+                updateProgress(totalProgress);
+
+                // Add small delay to prevent overwhelming the connection
+                await new Promise(resolve => setTimeout(resolve, 10));
             }
+
+            // Send completion message
+            conn.send({
+                type: 'file-complete',
+                name: file.name,
+                size: file.size,
+                totalChunks: chunkIndex
+            });
+
+            // Create URL for sender's reference
+            const url = URL.createObjectURL(file);
+            addFileToHistory(file, 'sent', url);
+            
+            // Update final progress
+            peerProgress.set(peerId, 100);
+            updateProgress(100);
+            
+            resolve();
         } catch (error) {
+            console.error('Error sending file:', error);
+            showNotification(`Error sending file: ${error.message}`, 'error');
             reject(error);
         } finally {
             peerProgress.delete(conn.peer);
@@ -663,33 +698,50 @@ async function sendFileToPeer(file, conn, totalPeers) {
     });
 }
 
-// Helper function to read file chunks
-function readFileChunk(file, start, end) {
+// Helper function to read file chunks with timeout
+async function readFileChunk(file, start, end) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsArrayBuffer(file.slice(start, end));
+        const blob = file.slice(start, end);
+        
+        const timeout = setTimeout(() => {
+            reader.abort();
+            reject(new Error('Chunk read timeout'));
+        }, CHUNK_TIMEOUT);
+
+        reader.onload = () => {
+            clearTimeout(timeout);
+            resolve(reader.result);
+        };
+
+        reader.onerror = () => {
+            clearTimeout(timeout);
+            reject(reader.error);
+        };
+
+        reader.readAsArrayBuffer(blob);
     });
 }
 
-// Update progress bar and text
-function updateProgress(percent) {
-    if (!transferInProgress) return;
+// Update progress bar visibility and value
+function updateProgress(progress) {
+    if (!elements.transferProgress) return;
     
-    // Ensure integer value and cap at 100
-    const progress = Math.min(Math.round(percent), 100);
+    // Ensure progress bar is visible
+    elements.transferProgress.classList.remove('hidden');
     
-    // Only update if the progress has changed
-    if (elements.progressText.textContent !== `${progress}%`) {
-        elements.progress.style.width = `${progress}%`;
-        elements.progressText.textContent = `${progress}%`;
-        
-        if (progress > 0 && progress < 100) {
-            elements.transferInfo.style.display = 'block';
-        } else {
-            elements.transferInfo.style.display = 'none';
-        }
+    // Update progress value
+    const progressBar = elements.transferProgress.querySelector('.progress-bar');
+    if (progressBar) {
+        progressBar.style.width = `${progress}%`;
+        progressBar.textContent = `${progress}%`;
+    }
+    
+    // Hide progress bar when complete
+    if (progress >= 100) {
+        setTimeout(() => {
+            elements.transferProgress.classList.add('hidden');
+        }, 1000);
     }
 }
 

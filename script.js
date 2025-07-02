@@ -4,7 +4,9 @@ const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 const MAX_CHUNK_RETRIES = 3;
-const CHUNK_TIMEOUT = 10000; // 10 seconds timeout for each chunk
+const CHUNK_TIMEOUT = 15000; // 15 seconds timeout
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY = 1000; // 1 second between retries
 
 // DOM Elements
 const elements = {
@@ -42,6 +44,7 @@ let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
 let peerCount = 0;
+let currentTransfer = null;
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -488,45 +491,93 @@ async function handleFileHeader(data) {
     elements.transferProgress.classList.remove('hidden');
 }
 
-// Handle file chunk data
+// Initialize progress bar
+function initializeProgressBar() {
+    const progressBar = elements.transferProgress.querySelector('.progress-bar');
+    if (progressBar) {
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+    }
+    elements.transferProgress.classList.remove('hidden');
+}
+
+// Update progress with debouncing
+const updateProgress = (() => {
+    let timeout;
+    return (progress) => {
+        if (!elements.transferProgress) return;
+        
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+            const progressBar = elements.transferProgress.querySelector('.progress-bar');
+            if (progressBar) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${progress}%`;
+            }
+            
+            // Show progress bar while transfer is in progress
+            if (progress < 100) {
+                elements.transferProgress.classList.remove('hidden');
+            } else {
+                setTimeout(() => {
+                    elements.transferProgress.classList.add('hidden');
+                }, 1000);
+            }
+        }, 16); // ~60fps
+    };
+})();
+
+// Handle incoming file chunks with retry logic
 async function handleFileChunk(data) {
     try {
         const fileId = generateFileId({ name: data.name, size: data.size });
         
-        // Initialize file data if not exists
+        // Initialize file data structure
         if (!fileChunks[fileId]) {
             fileChunks[fileId] = {
                 name: data.name,
                 size: data.size,
                 type: data.fileType || 'application/octet-stream',
-                chunks: [],
+                chunks: new Array(Math.ceil(data.size / CHUNK_SIZE)),
                 receivedSize: 0,
-                expectedChunks: Math.ceil(data.size / CHUNK_SIZE)
+                expectedChunks: Math.ceil(data.size / CHUNK_SIZE),
+                missingChunks: new Set()
             };
-            // Show progress bar at start
-            elements.transferProgress.classList.remove('hidden');
+            initializeProgressBar();
         }
         
         const fileData = fileChunks[fileId];
         
-        // Store chunk data
-        fileData.chunks.push(data.data);
-        fileData.receivedSize += data.data.byteLength;
-        
-        // Calculate and update progress
-        const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
-        updateProgress(progress);
-        
-        // Log progress for debugging
-        console.log(`Receiving ${data.name}: ${progress}% (${fileData.receivedSize}/${fileData.size} bytes)`);
+        // Store chunk at correct index
+        if (!fileData.chunks[data.chunkIndex]) {
+            fileData.chunks[data.chunkIndex] = data.data;
+            fileData.receivedSize += data.data.byteLength;
+            
+            // Calculate and update progress
+            const progress = Math.round((fileData.receivedSize / fileData.size) * 100);
+            updateProgress(progress);
+            
+            // Log progress for debugging
+            console.log(`Receiving ${data.name}: ${progress}% (${fileData.receivedSize}/${fileData.size} bytes)`);
+        }
         
     } catch (error) {
         console.error('Error handling file chunk:', error);
-        showNotification('Error receiving file chunk', 'error');
+        showNotification('Error receiving file chunk. Retrying...', 'warning');
+        
+        // Request missing chunk
+        if (currentTransfer && currentTransfer.conn) {
+            currentTransfer.conn.send({
+                type: 'request-chunk',
+                name: data.name,
+                size: data.size,
+                chunkIndex: data.chunkIndex
+            });
+        }
     }
 }
 
-// Handle file completion
+// Handle file completion with verification
 async function handleFileComplete(data) {
     try {
         const fileId = generateFileId({ name: data.name, size: data.size });
@@ -536,17 +587,18 @@ async function handleFileComplete(data) {
             throw new Error('No file data found');
         }
 
-        // Verify file completeness
-        if (fileData.receivedSize !== fileData.size) {
-            throw new Error(`Incomplete file transfer: received ${fileData.receivedSize} of ${fileData.size} bytes`);
+        // Verify all chunks are received
+        const missingChunks = fileData.chunks.findIndex(chunk => !chunk);
+        if (missingChunks !== -1) {
+            throw new Error(`Missing chunks detected. Transfer incomplete.`);
         }
 
         // Create blob with correct type
         const blob = new Blob(fileData.chunks, { type: fileData.type });
         
-        // Verify blob size
+        // Verify file size
         if (blob.size !== fileData.size) {
-            throw new Error(`Blob size mismatch: expected ${fileData.size}, got ${blob.size}`);
+            throw new Error(`File size mismatch: expected ${fileData.size}, got ${blob.size}`);
         }
 
         // Create file object
@@ -555,15 +607,15 @@ async function handleFileComplete(data) {
             lastModified: new Date().getTime()
         });
 
-        // Create and store blob URL
+        // Create blob URL
         const url = URL.createObjectURL(blob);
+        
+        // Add to download history
         addFileToHistory(file, 'received', url);
         
         // Clean up
         delete fileChunks[fileId];
         showNotification(`File "${file.name}" received successfully`, 'success');
-        
-        // Ensure progress bar shows 100% briefly before hiding
         updateProgress(100);
         
     } catch (error) {
@@ -613,18 +665,17 @@ async function sendFile(file) {
 // Track progress for multiple peers
 const peerProgress = new Map();
 
-// New function to handle sending file to a specific peer
+// Improved file sending with retry logic
 async function sendFileToPeer(file, conn, totalPeers) {
     return new Promise(async (resolve, reject) => {
         try {
-            const fileId = generateFileId(file);
             const peerId = conn.peer;
+            currentTransfer = { file, conn, peerId };
             
-            // Show progress bar at start
-            elements.transferProgress.classList.remove('hidden');
+            initializeProgressBar();
             peerProgress.set(peerId, 0);
             
-            // Send file header with more metadata
+            // Send file header
             conn.send({
                 type: 'file-header',
                 name: file.name,
@@ -634,7 +685,7 @@ async function sendFileToPeer(file, conn, totalPeers) {
                 chunkSize: CHUNK_SIZE
             });
 
-            // Read and send file chunks with verification
+            // Send chunks with retry logic
             let offset = 0;
             let chunkIndex = 0;
             
@@ -643,31 +694,44 @@ async function sendFileToPeer(file, conn, totalPeers) {
                     throw new Error('Transfer cancelled');
                 }
 
-                const chunk = await readFileChunk(file, offset, Math.min(offset + CHUNK_SIZE, file.size));
+                let success = false;
+                let attempts = 0;
                 
-                // Send chunk with metadata
-                conn.send({
-                    type: 'file-chunk',
-                    name: file.name,
-                    size: file.size,
-                    chunkIndex: chunkIndex,
-                    data: chunk,
-                    offset: offset
-                });
+                while (!success && attempts < RETRY_ATTEMPTS) {
+                    try {
+                        const chunk = await readFileChunk(file, offset, Math.min(offset + CHUNK_SIZE, file.size));
+                        
+                        conn.send({
+                            type: 'file-chunk',
+                            name: file.name,
+                            size: file.size,
+                            chunkIndex: chunkIndex,
+                            data: chunk,
+                            offset: offset
+                        });
+                        
+                        success = true;
+                    } catch (error) {
+                        attempts++;
+                        if (attempts >= RETRY_ATTEMPTS) {
+                            throw new Error(`Failed to send chunk ${chunkIndex} after ${RETRY_ATTEMPTS} attempts`);
+                        }
+                        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                    }
+                }
 
-                offset += chunk.byteLength;
+                offset += CHUNK_SIZE;
                 chunkIndex++;
 
                 // Update progress
-                const peerProgressValue = Math.round((offset / file.size) * 100);
-                peerProgress.set(peerId, peerProgressValue);
+                const progress = Math.round((offset / file.size) * 100);
+                peerProgress.set(peerId, progress);
                 
-                // Update overall progress
                 const totalProgress = Math.round(Array.from(peerProgress.values())
-                    .reduce((sum, progress) => sum + progress, 0) / (totalPeers * 100) * 100);
+                    .reduce((sum, p) => sum + p, 0) / (totalPeers * 100) * 100);
                 updateProgress(totalProgress);
 
-                // Add small delay to prevent overwhelming the connection
+                // Small delay between chunks
                 await new Promise(resolve => setTimeout(resolve, 10));
             }
 
@@ -683,22 +747,21 @@ async function sendFileToPeer(file, conn, totalPeers) {
             const url = URL.createObjectURL(file);
             addFileToHistory(file, 'sent', url);
             
-            // Update final progress
-            peerProgress.set(peerId, 100);
             updateProgress(100);
-            
             resolve();
+            
         } catch (error) {
             console.error('Error sending file:', error);
             showNotification(`Error sending file: ${error.message}`, 'error');
             reject(error);
         } finally {
             peerProgress.delete(conn.peer);
+            currentTransfer = null;
         }
     });
 }
 
-// Helper function to read file chunks with timeout
+// Helper function to read file chunks with timeout and retry
 async function readFileChunk(file, start, end) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -721,28 +784,6 @@ async function readFileChunk(file, start, end) {
 
         reader.readAsArrayBuffer(blob);
     });
-}
-
-// Update progress bar visibility and value
-function updateProgress(progress) {
-    if (!elements.transferProgress) return;
-    
-    // Ensure progress bar is visible
-    elements.transferProgress.classList.remove('hidden');
-    
-    // Update progress value
-    const progressBar = elements.transferProgress.querySelector('.progress-bar');
-    if (progressBar) {
-        progressBar.style.width = `${progress}%`;
-        progressBar.textContent = `${progress}%`;
-    }
-    
-    // Hide progress bar when complete
-    if (progress >= 100) {
-        setTimeout(() => {
-            elements.transferProgress.classList.add('hidden');
-        }, 1000);
-    }
 }
 
 // UI Functions
@@ -1032,13 +1073,10 @@ function addFileToHistory(file, type, url = null) {
     }
 }
 
-// Update files list display
+// Update files list with download handling
 function updateFilesList(listElement, fileInfo, type) {
-    // Check if file already exists in the list
     const existingFile = Array.from(listElement.children).find(li => li.dataset.fileId === fileInfo.id);
-    if (existingFile) {
-        return; // Skip if file already exists
-    }
+    if (existingFile) return;
 
     const li = document.createElement('li');
     li.dataset.fileId = fileInfo.id;
@@ -1064,27 +1102,29 @@ function updateFilesList(listElement, fileInfo, type) {
     li.appendChild(icon);
     li.appendChild(fileInfoDiv);
 
-    // Add download button for both sent and received files
-    const downloadButton = document.createElement('button');
-    downloadButton.className = 'download-button';
-    downloadButton.innerHTML = '<span class="material-icons">download</span>';
-    downloadButton.title = 'Download file';
-
     if (fileInfo.url) {
+        const downloadButton = document.createElement('button');
+        downloadButton.className = 'download-button';
+        downloadButton.innerHTML = '<span class="material-icons">download</span>';
+        downloadButton.title = 'Download file';
+
         downloadButton.addEventListener('click', async () => {
             try {
+                // Create a temporary anchor element
+                const a = document.createElement('a');
+                a.href = fileInfo.url;
+                a.download = fileInfo.name; // Set the download filename
+                
+                // Force download in new tab/window
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                
                 // For iOS devices
                 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-                
                 if (isIOS) {
-                    // iOS requires a different approach
-                    window.location.href = fileInfo.url;
+                    window.open(fileInfo.url, '_blank');
                 } else {
-                    // For other devices
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = fileInfo.url;
-                    a.download = fileInfo.name;
+                    // Trigger download
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
@@ -1094,14 +1134,10 @@ function updateFilesList(listElement, fileInfo, type) {
                 showNotification('Failed to download file', 'error');
             }
         });
-    } else {
-        downloadButton.classList.add('disabled');
-        downloadButton.title = 'File not available for download';
+
+        li.appendChild(downloadButton);
     }
 
-    li.appendChild(downloadButton);
-
-    // Insert at the beginning of the list
     listElement.insertBefore(li, listElement.firstChild);
 }
 

@@ -250,45 +250,53 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
-// Add global file history management
+// Global file history map
 const globalFileHistory = new Map();
 
 // Broadcast file info to all peers
 function broadcastFileInfo(fileInfo, type) {
-    // Don't broadcast if we're not the host
-    if (!peer || !peer.id || peer.id !== hostId) return;
-    
-    for (const [peerId, conn] of connections) {
-        if (conn && conn.open) {
+    connections.forEach((conn) => {
+        if (conn.open) {
             conn.send({
                 type: 'file-broadcast',
-                fileInfo: {
-                    ...fileInfo,
-                    originalSender: peer.id
-                },
-                historyType: type
+                fileInfo: fileInfo,
+                transferType: type
             });
         }
-    }
+    });
 }
 
-// Handle file broadcast reception
-function handleFileBroadcast(data) {
-    const { fileInfo, historyType } = data;
-    
-    // Add to global file history if not exists
-    const fileId = fileInfo.id;
-    if (!globalFileHistory.has(fileId)) {
-        globalFileHistory.set(fileId, {
-            ...fileInfo,
-            type: historyType
+// Send file history to new peer
+function sendFileHistory(conn) {
+    if (!conn.open) return;
+
+    // Send all files from global history
+    globalFileHistory.forEach((fileInfo) => {
+        conn.send({
+            type: 'file-broadcast',
+            fileInfo: fileInfo,
+            transferType: fileInfo.type
         });
-        
-        // Update UI for the broadcasted file
+    });
+}
+
+// Handle file broadcast
+function handleFileBroadcast(data) {
+    const fileInfo = data.fileInfo;
+    const type = data.transferType;
+
+    // Add to global history if not exists
+    if (!globalFileHistory.has(fileInfo.id)) {
+        globalFileHistory.set(fileInfo.id, {
+            ...fileInfo,
+            type: type
+        });
+
+        // Update UI
         updateFilesList(
-            historyType === 'sent' ? elements.sentFilesList : elements.receivedFilesList,
+            type === 'sent' ? elements.sentFilesList : elements.receivedFilesList,
             fileInfo,
-            historyType
+            type
         );
     }
 }
@@ -304,6 +312,22 @@ function addFileToHistory(file, type, url = null) {
         timestamp: new Date().toISOString(),
         url: url
     };
+
+    // Store in IndexedDB
+    try {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        store.put({
+            id: fileId,
+            blob: file,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            timestamp: new Date().getTime()
+        });
+    } catch (error) {
+        console.error('Failed to store file in IndexedDB:', error);
+    }
 
     // Add to local history if not exists
     if (!fileHistory[type].has(fileId)) {
@@ -361,11 +385,13 @@ function setupConnectionHandlers(conn) {
                 case 'file-complete':
                     await handleFileComplete(data);
                     break;
+                case 'file-broadcast':
+                    handleFileBroadcast(data);
+                    break;
                 case 'chunk-ack':
                     handleChunkAck(data);
                     break;
                 case 'heartbeat':
-                    // Respond to heartbeat
                     conn.send({ type: 'heartbeat-ack' });
                     break;
             }
@@ -925,68 +951,37 @@ function updateFilesList(listElement, fileInfo, type) {
     fileContent.appendChild(fileInfoDiv);
     li.appendChild(fileContent);
 
-    if (fileInfo.url) {
-        const downloadButton = document.createElement('button');
-        downloadButton.className = 'download-button';
-        downloadButton.innerHTML = '<span class="material-icons">download</span>';
-        downloadButton.title = 'Download file';
+    const downloadButton = document.createElement('button');
+    downloadButton.className = 'download-button';
+    downloadButton.innerHTML = '<span class="material-icons">download</span>';
+    downloadButton.title = 'Download file';
 
-        downloadButton.addEventListener('click', async () => {
-            try {
-                // For iOS devices
-                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-                
-                if (isIOS) {
-                    // For iOS, open in new tab
-                    window.open(fileInfo.url, '_blank');
-                } else {
-                    // For other devices, try to get from IndexedDB first
-                    try {
-                        const transaction = db.transaction([STORE_NAME], 'readonly');
-                        const store = transaction.objectStore(STORE_NAME);
-                        const fileData = await store.get(fileInfo.id);
-                        
-                        if (fileData && fileData.blob) {
-                            // Create new URL from stored blob
-                            const url = URL.createObjectURL(fileData.blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = fileInfo.name;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            
-                            // Clean up the URL after a delay
-                            setTimeout(() => URL.revokeObjectURL(url), 1000);
-                        } else {
-                            // Fallback to original URL if not in IndexedDB
-                            const a = document.createElement('a');
-                            a.href = fileInfo.url;
-                            a.download = fileInfo.name;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                        }
-                    } catch (dbError) {
-                        console.error('IndexedDB error:', dbError);
-                        // Fallback to original URL
-                        const a = document.createElement('a');
-                        a.href = fileInfo.url;
-                        a.download = fileInfo.name;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }
-                }
-            } catch (error) {
-                console.error('Download error:', error);
-                showNotification('Failed to download file', 'error');
+    downloadButton.addEventListener('click', async () => {
+        try {
+            // Try to get file from IndexedDB first
+            const transaction = db.transaction([STORE_NAME], 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const fileData = await store.get(fileInfo.id);
+
+            if (fileData && fileData.blob) {
+                // Create new URL from stored blob
+                const url = URL.createObjectURL(fileData.blob);
+                await downloadFile(url, fileInfo.name);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } else if (fileInfo.url) {
+                // Fallback to original URL
+                await downloadFile(fileInfo.url, fileInfo.name);
+            } else {
+                // Request file from peers if not available locally
+                await requestFileFromPeers(fileInfo.id);
             }
-        });
+        } catch (error) {
+            console.error('Download error:', error);
+            showNotification('Failed to download file', 'error');
+        }
+    });
 
-        li.appendChild(downloadButton);
-    }
-
+    li.appendChild(downloadButton);
     listElement.insertBefore(li, listElement.firstChild);
 }
 
@@ -1342,6 +1337,9 @@ function handleConnection(conn) {
                 case 'file-complete':
                     await handleFileComplete(data);
                     break;
+                case 'file-broadcast':
+                    handleFileBroadcast(data);
+                    break;
                 case 'chunk-ack':
                     handleChunkAck(data);
                     break;
@@ -1431,6 +1429,103 @@ elements.fileInput.addEventListener('change', async (e) => {
         showNotification('Please connect to at least one peer first', 'error');
     }
 });
+
+// Helper function to download file
+async function downloadFile(url, filename) {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    
+    if (isIOS) {
+        window.open(url, '_blank');
+    } else {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+}
+
+// Request file from peers
+async function requestFileFromPeers(fileId) {
+    let received = false;
+    const promises = Array.from(connections.values()).map(async (conn) => {
+        if (!conn.open) return;
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(false), 5000);
+
+            conn.send({
+                type: 'file-request',
+                fileId: fileId
+            });
+
+            const handler = async (data) => {
+                if (data.type === 'file-response' && data.fileId === fileId) {
+                    clearTimeout(timeout);
+                    conn.off('data', handler);
+
+                    if (data.blob) {
+                        try {
+                            // Store in IndexedDB
+                            const transaction = db.transaction([STORE_NAME], 'readwrite');
+                            const store = transaction.objectStore(STORE_NAME);
+                            await store.put({
+                                id: fileId,
+                                blob: data.blob,
+                                name: data.name,
+                                type: data.type,
+                                size: data.size,
+                                timestamp: Date.now()
+                            });
+
+                            // Download file
+                            const url = URL.createObjectURL(data.blob);
+                            await downloadFile(url, data.name);
+                            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+                            received = true;
+                            resolve(true);
+                        } catch (error) {
+                            console.error('Error handling file response:', error);
+                            resolve(false);
+                        }
+                    }
+                }
+            };
+
+            conn.on('data', handler);
+        });
+    });
+
+    await Promise.race(promises);
+
+    if (!received) {
+        showNotification('File not available from any peer', 'error');
+    }
+}
+
+// Handle file request
+async function handleFileRequest(data, conn) {
+    try {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const fileData = await store.get(data.fileId);
+
+        if (fileData && fileData.blob) {
+            conn.send({
+                type: 'file-response',
+                fileId: data.fileId,
+                blob: fileData.blob,
+                name: fileData.name,
+                type: fileData.type,
+                size: fileData.size
+            });
+        }
+    } catch (error) {
+        console.error('Error handling file request:', error);
+    }
+}
 
 init();
 

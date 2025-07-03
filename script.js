@@ -15,7 +15,6 @@ const elements = {
     dropZone: document.getElementById('drop-zone'),
     transferProgress: document.getElementById('transfer-progress'),
     progress: document.getElementById('progress'),
-    progressText: document.getElementById('progress-text'),
     transferInfo: document.getElementById('transfer-info'),
     fileList: document.getElementById('file-list'),
     statusText: document.getElementById('status-text'),
@@ -687,7 +686,6 @@ function updateProgress(percent) {
     if (!transferInProgress) return;
     const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
     elements.progress.style.width = `${progress}%`;
-    elements.progressText.textContent = `${progress}%`;
     
     if (progress > 0 && progress < 100) {
         elements.transferInfo.style.display = 'block';
@@ -763,7 +761,6 @@ function resetConnection() {
     elements.fileTransferSection.classList.add('hidden');
     elements.transferProgress.classList.add('hidden');
     elements.progress.style.width = '0%';
-    elements.progressText.textContent = '0%';
     elements.transferInfo.style.display = 'none';
     updateConnectionStatus('', 'Ready to connect');
 }
@@ -848,7 +845,6 @@ elements.fileInput.addEventListener('change', (e) => {
 
 // Add a helper function for updating progress
 function updateProgress(progress) {
-    elements.progressText.textContent = `${progress}%`;
     elements.progress.style.width = `${progress}%`;
 }
 

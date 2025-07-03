@@ -197,12 +197,9 @@ function initShareButton() {
 async function shareId() {
     try {
         const peerId = elements.peerId.textContent;
-        const shareUrl = `${window.location.origin}${window.location.pathname}?peer=${peerId}`;
-        const shareData = {
-            url: shareUrl
-        };
-
-        await navigator.share(shareData);
+        const baseUrl = window.location.origin + window.location.pathname;
+        const qrUrl = `${baseUrl}?peer=${peerId}`;
+        await navigator.share({ url: qrUrl });
         showNotification('Share successful!', 'success');
     } catch (error) {
         if (error.name !== 'AbortError') {

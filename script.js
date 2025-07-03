@@ -279,21 +279,40 @@ function initPeerJS() {
 
 // Handle new peer connection
 function handleConnection(conn) {
-    connections.set(conn.peer, conn);
-    updateConnectionStatus();
-    addToRecentPeers(conn.peer);
-
+    console.log('Setting up connection with peer:', conn.peer);
+    
+    // Wait for the connection to be ready
     conn.on('open', () => {
         console.log('Connection opened with peer:', conn.peer);
+        connections.set(conn.peer, conn);
+        updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+        elements.fileTransferSection.classList.remove('hidden');
+        addToRecentPeers(conn.peer);
+
         // Send existing file history to new peer
         sendFileHistoryToPeer(conn);
     });
 
     conn.on('data', handleDataReceived);
-    conn.on('close', () => handlePeerDisconnect(conn.peer));
+    
+    conn.on('close', () => {
+        console.log('Connection closed with:', conn.peer);
+        connections.delete(conn.peer);
+        updateConnectionStatus(
+            connections.size > 0 ? 'connected' : 'disconnected',
+            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected'
+        );
+        if (connections.size === 0) {
+            elements.fileTransferSection.classList.add('hidden');
+            showNotification('Disconnected from peer', 'warning');
+        }
+    });
+
     conn.on('error', (err) => {
         console.error('Connection error:', err);
-        handlePeerDisconnect(conn.peer);
+        connections.delete(conn.peer);
+        updateConnectionStatus('error', 'Connection error occurred');
+        showNotification('Connection error: ' + err.message, 'error');
     });
 }
 
@@ -389,51 +408,6 @@ async function handleFileHistory(files) {
         }
     }
     console.log('Finished processing file history');
-}
-
-// Modify the peer connection setup
-function setupPeer() {
-    peer = new Peer(undefined, {
-        host: 'peerjs-server.herokuapp.com',
-        secure: true,
-        port: 443,
-        debug: 2
-    });
-
-    peer.on('open', (id) => {
-        console.log('My peer ID is:', id);
-        elements.peerId.textContent = id;
-        updateConnectionStatus();
-        setupQRCode(id);
-    });
-
-    peer.on('connection', (conn) => {
-        console.log('Incoming connection from:', conn.peer);
-        handleConnection(conn);
-    });
-
-    peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        showNotification('Connection error: ' + err.message, 'error');
-        updateConnectionStatus();
-    });
-}
-
-// Connect to a peer
-function connectToPeer(remotePeerId) {
-    if (peer && remotePeerId) {
-        try {
-            console.log('Initiating connection to:', remotePeerId);
-            const conn = peer.connect(remotePeerId, {
-                reliable: true
-            });
-            
-            handleConnection(conn);
-        } catch (error) {
-            console.error('Error connecting to peer:', error);
-            showNotification('Failed to connect: ' + error.message, 'error');
-        }
-    }
 }
 
 // Handle file header
@@ -910,29 +884,13 @@ elements.copyId.addEventListener('click', () => {
 });
 
 elements.connectButton.addEventListener('click', () => {
-    const remotePeerIdValue = elements.remotePeerId.value.trim();
-    if (!remotePeerIdValue) {
-        showNotification('Please enter a Peer ID', 'error');
-        return;
-    }
-
-    if (connections.has(remotePeerIdValue)) {
-        showNotification('Already connected to this peer', 'warning');
-        return;
-    }
-
-    try {
-        console.log('Attempting to connect to:', remotePeerIdValue);
-        updateConnectionStatus('connecting', 'Connecting...');
-        const newConnection = peer.connect(remotePeerIdValue, {
-            reliable: true
-        });
-        connections.set(remotePeerIdValue, newConnection);
-        setupConnectionHandlers(newConnection);
-    } catch (error) {
-        console.error('Connection attempt error:', error);
-        showNotification('Failed to establish connection', 'error');
-        updateConnectionStatus('', 'Connection failed');
+    const remotePeerId = elements.remotePeerId.value.trim();
+    if (remotePeerId) {
+        connectToPeer(remotePeerId);
+        elements.remotePeerId.value = '';
+        elements.recentPeers.classList.add('hidden');
+    } else {
+        showNotification('Please enter a peer ID', 'error');
     }
 });
 
@@ -1035,16 +993,111 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-// Add function to update connection status
-function updateConnectionStatus(status, message) {
-    elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message;
-    
-    // Update title to show number of connections
-    if (connections && connections.size > 0) {
-        document.title = `(${connections.size}) P2P File Share`;
-    } else {
-        document.title = 'P2P File Share';
+// Update connection status
+function updateConnectionStatus(status = '', message = '') {
+    const statusDot = elements.statusDot;
+    const statusText = elements.statusText;
+
+    switch (status) {
+        case 'connected':
+            statusDot.className = 'status-dot connected';
+            statusText.textContent = message || 'Connected';
+            break;
+        case 'connecting':
+            statusDot.className = 'status-dot connecting';
+            statusText.textContent = message || 'Connecting...';
+            break;
+        case 'disconnected':
+            statusDot.className = 'status-dot';
+            statusText.textContent = message || 'Disconnected';
+            elements.fileTransferSection.classList.add('hidden');
+            break;
+        case 'error':
+            statusDot.className = 'status-dot error';
+            statusText.textContent = message || 'Error';
+            elements.fileTransferSection.classList.add('hidden');
+            break;
+        default:
+            if (connections.size > 0) {
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = `Connected to ${connections.size} peer(s)`;
+            } else {
+                statusDot.className = 'status-dot';
+                statusText.textContent = 'Ready to connect';
+            }
+    }
+}
+
+// Connect to a peer
+function connectToPeer(remotePeerId) {
+    if (!peer || !remotePeerId) {
+        showNotification('Invalid peer ID', 'error');
+        return;
+    }
+
+    if (connections.has(remotePeerId)) {
+        showNotification('Already connected to this peer', 'warning');
+        return;
+    }
+
+    try {
+        console.log('Initiating connection to:', remotePeerId);
+        updateConnectionStatus('connecting', 'Connecting...');
+        
+        const conn = peer.connect(remotePeerId, {
+            reliable: true
+        });
+
+        if (!conn) {
+            throw new Error('Failed to create connection');
+        }
+
+        handleConnection(conn);
+    } catch (error) {
+        console.error('Error connecting to peer:', error);
+        updateConnectionStatus('error', 'Connection failed');
+        showNotification('Failed to connect: ' + error.message, 'error');
+    }
+}
+
+// Setup peer
+function setupPeer() {
+    try {
+        peer = new Peer(undefined, {
+            host: 'peerjs-server.herokuapp.com',
+            secure: true,
+            port: 443,
+            debug: 2
+        });
+
+        peer.on('open', (id) => {
+            console.log('My peer ID is:', id);
+            elements.peerId.textContent = id;
+            updateConnectionStatus();
+            setupQRCode(id);
+        });
+
+        peer.on('connection', (conn) => {
+            console.log('Incoming connection from:', conn.peer);
+            updateConnectionStatus('connecting', 'Incoming connection...');
+            handleConnection(conn);
+        });
+
+        peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            showNotification('Connection error: ' + err.message, 'error');
+            updateConnectionStatus('error', 'Peer error occurred');
+        });
+
+        peer.on('disconnected', () => {
+            console.log('Disconnected from server');
+            updateConnectionStatus('disconnected', 'Disconnected from server');
+        });
+
+    } catch (error) {
+        console.error('Error setting up peer:', error);
+        showNotification('Failed to initialize connection: ' + error.message, 'error');
+        updateConnectionStatus('error', 'Setup failed');
     }
 }
 

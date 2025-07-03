@@ -299,7 +299,7 @@ function setupConnectionHandlers(conn) {
             } else if (data.type === 'file-history-update') {
                 // Handle file history update
                 const fileId = data.fileInfo.id;
-                const type = data.historyType;
+                const type = data.fileInfo.sharedBy === peer.id ? 'sent' : 'received';
                 
                 // Only add if not already in history
                 if (!fileHistory[type].has(fileId)) {
@@ -505,6 +505,9 @@ async function sendFile(file) {
 // Send file to a specific peer
 async function sendFileToPeer(file, conn, fileId) {
     try {
+        // Create blob from file for the sender to keep
+        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+
         // Send file header to peer
         conn.send({
             type: 'file-header',
@@ -512,7 +515,7 @@ async function sendFileToPeer(file, conn, fileId) {
             fileName: file.name,
             fileType: file.type,
             fileSize: file.size,
-            originalSender: peer.id // Add original sender information
+            originalSender: peer.id
         });
 
         let offset = 0;
@@ -543,13 +546,13 @@ async function sendFileToPeer(file, conn, fileId) {
             originalSender: peer.id
         });
 
-        // Add to file history for sender
+        // Add to file history for sender with the blob
         const fileInfo = {
             name: file.name,
             type: file.type,
             size: file.size,
             id: fileId,
-            blob: new Blob([await file.arrayBuffer()]), // Store blob for sender
+            blob: fileBlob,
             sharedBy: peer.id
         };
         addFileToHistory(fileInfo, 'sent');
@@ -834,15 +837,23 @@ function updateConnectionStatus(status, message) {
 function addFileToHistory(fileInfo, type) {
     const fileId = fileInfo.id || generateFileId(fileInfo);
     
+    // Determine correct history type based on who shared the file
+    let actualType = type;
+    if (fileInfo.sharedBy === peer.id) {
+        actualType = 'sent';
+    } else if (type !== 'sent') {
+        actualType = 'received';
+    }
+    
     // Store in appropriate history set
-    fileHistory[type].add(fileId);
+    fileHistory[actualType].add(fileId);
     
     // Update UI
-    const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
-    updateFilesList(listElement, fileInfo, type);
+    const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+    updateFilesList(listElement, fileInfo, actualType);
     
     // Notify other peers about the file history update
-    broadcastFileHistory(fileInfo, type);
+    broadcastFileHistory(fileInfo, actualType);
 }
 
 // Broadcast file history to all connected peers
@@ -868,11 +879,19 @@ function broadcastFileHistory(fileInfo, type) {
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
-    // Check if file already exists in list
-    const existingFile = Array.from(listElement.children).find(li => 
+    // Check if file already exists in any list to prevent duplicates
+    const sentList = document.getElementById('sent-files-list');
+    const receivedList = document.getElementById('received-files-list');
+    
+    const existingInSent = Array.from(sentList.children).find(li => 
         li.getAttribute('data-file-id') === fileInfo.id
     );
-    if (existingFile) return; // Skip if already in list
+    const existingInReceived = Array.from(receivedList.children).find(li => 
+        li.getAttribute('data-file-id') === fileInfo.id
+    );
+    
+    // If file exists in either list, don't add it again
+    if (existingInSent || existingInReceived) return;
 
     const li = document.createElement('li');
     li.className = 'file-item';
@@ -916,6 +935,8 @@ function updateFilesList(listElement, fileInfo, type) {
             document.body.removeChild(a);
             // Revoke URL immediately after download starts
             setTimeout(() => URL.revokeObjectURL(url), 100);
+        } else {
+            showNotification('File data not available for download', 'error');
         }
     };
     

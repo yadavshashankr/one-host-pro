@@ -419,6 +419,103 @@ function updateTransferInfo(message) {
     }
 }
 
+// Add file to history
+function addFileToHistory(fileInfo, type) {
+    const fileId = fileInfo.id || generateFileId(fileInfo);
+    
+    // Determine the correct type based on who shared the file
+    const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
+    
+    // Remove from both history sets to prevent duplicates
+    fileHistory.sent.delete(fileId);
+    fileHistory.received.delete(fileId);
+    
+    // Add to the correct history set
+    fileHistory[actualType].add(fileId);
+    
+    // Remove existing entries from UI if any
+    const sentList = elements.sentFilesList;
+    const receivedList = elements.receivedFilesList;
+    
+    // Remove from sent list if exists
+    const existingInSent = sentList.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingInSent) {
+        existingInSent.remove();
+    }
+    
+    // Remove from received list if exists
+    const existingInReceived = receivedList.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingInReceived) {
+        existingInReceived.remove();
+    }
+    
+    // Update UI with the correct list
+    const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+    updateFilesList(listElement, fileInfo, actualType);
+}
+
+// Send file to a specific peer
+async function sendFileToPeer(file, conn, fileId, fileBlob) {
+    try {
+        if (!conn.open) {
+            throw new Error('Connection is not open');
+        }
+
+        // Send file header
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        });
+
+        // Convert blob to array buffer once
+        const buffer = await fileBlob.arrayBuffer();
+        let offset = 0;
+        
+        while (offset < file.size) {
+            if (!conn.open) {
+                throw new Error('Connection lost during transfer');
+            }
+
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            conn.send({
+                type: 'file-chunk',
+                fileId: fileId,
+                data: chunk,
+                offset: offset,
+                originalSender: peer.id
+            });
+
+            offset += chunk.byteLength;
+            const progress = Math.min((offset / file.size) * 100, 100);
+            updateProgress(progress);
+        }
+
+        // Verify connection is still open before sending completion
+        if (!conn.open) {
+            throw new Error('Connection lost before completion');
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        });
+
+        console.log(`File sent successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error sending file to peer ${conn.peer}:`, error);
+        throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
+    }
+}
+
 // Send file function
 async function sendFile(file) {
     if (connections.size === 0) {
@@ -434,6 +531,7 @@ async function sendFile(file) {
     try {
         transferInProgress = true;
         elements.transferProgress.classList.remove('hidden');
+        updateProgress(0);
 
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
@@ -454,71 +552,32 @@ async function sendFile(file) {
 
         // Send to all connected peers
         const sendPromises = [];
+        let successCount = 0;
+        const errors = [];
+
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
-                console.log('Sending file to peer:', peerId);
-                sendPromises.push(sendFileToPeer(file, conn, fileId, fileBlob));
+                try {
+                    await sendFileToPeer(file, conn, fileId, fileBlob);
+                    successCount++;
+                } catch (error) {
+                    errors.push(error.message);
+                }
             }
         }
 
-        await Promise.all(sendPromises);
-        showNotification(`File sent successfully to ${connections.size} peer(s)`, 'success');
+        if (successCount > 0) {
+            showNotification(`File sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
+        } else {
+            throw new Error('Failed to send file to any peers: ' + errors.join(', '));
+        }
     } catch (error) {
         console.error('File send error:', error);
-        showNotification('Failed to send file: ' + error.message, 'error');
+        showNotification(error.message, 'error');
     } finally {
         transferInProgress = false;
         elements.transferProgress.classList.add('hidden');
         updateProgress(0);
-    }
-}
-
-// Send file to a specific peer
-async function sendFileToPeer(file, conn, fileId, fileBlob) {
-    try {
-        // Send file header
-        conn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            originalSender: peer.id
-        });
-
-        // Convert blob to array buffer once
-        const buffer = await fileBlob.arrayBuffer();
-        let offset = 0;
-        
-        while (offset < file.size) {
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            conn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset,
-                originalSender: peer.id
-            });
-
-            offset += chunk.byteLength;
-            const progress = Math.min((offset / file.size) * 100, 100);
-            updateProgress(progress);
-        }
-
-        // Send completion message
-        conn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            originalSender: peer.id
-        });
-
-        console.log(`File sent successfully to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error sending file to peer ${conn.peer}:`, error);
-        throw new Error(`Failed to send to peer ${conn.peer}`);
     }
 }
 
@@ -781,52 +840,6 @@ function updateConnectionStatus(status, message) {
         document.title = `(${connections.size}) P2P File Share`;
     } else {
         document.title = 'P2P File Share';
-    }
-}
-
-// Update file history management
-function addFileToHistory(fileInfo, type) {
-    const fileId = fileInfo.id || generateFileId(fileInfo);
-    
-    // Determine the correct type based on who shared the file
-    const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
-    
-    // Remove from both lists first to prevent duplicates
-    fileHistory.sent.delete(fileId);
-    fileHistory.received.delete(fileId);
-    
-    // Add to the correct history set
-    fileHistory[actualType].add(fileId);
-    
-    // Remove any existing entries from UI
-    removeFileFromLists(fileId);
-    
-    // Update UI with the correct list
-    const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
-    updateFilesList(listElement, fileInfo, actualType);
-    
-    // Notify other peers about the file history update
-    broadcastFileHistory(fileInfo, actualType);
-}
-
-// Broadcast file history to all connected peers
-function broadcastFileHistory(fileInfo, type) {
-    const historyUpdate = {
-        type: 'file-history-update',
-        fileInfo: {
-            id: fileInfo.id,
-            name: fileInfo.name,
-            type: fileInfo.type,
-            size: fileInfo.size,
-            sharedBy: fileInfo.sharedBy
-        },
-        historyType: type
-    };
-
-    for (const conn of connections.values()) {
-        if (conn.open) {
-            conn.send(historyUpdate);
-        }
     }
 }
 

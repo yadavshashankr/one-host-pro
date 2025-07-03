@@ -94,25 +94,16 @@ h3 {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s;
 }
 
 .icon-button:hover {
     background-color: var(--border-color);
-    transform: scale(1.1);
-}
-
-.icon-button:active {
-    transform: scale(0.95);
 }
 
 .icon-button .material-icons {
     font-size: 20px;
     color: var(--text-color);
-}
-
-.icon-button:hover .material-icons {
-    color: var(--primary-color);
 }
 
 /* QR Code styles */
@@ -126,11 +117,6 @@ h3 {
     padding: 10px;
     background: white;
     border-radius: 4px;
-    transition: transform 0.2s ease;
-}
-
-#qrcode:hover {
-    transform: scale(1.05);
 }
 
 /* Connect peer styles */
@@ -258,33 +244,25 @@ input[type="file"] {
 
 /* Progress bar styles */
 .progress-container {
-    width: 100%;
-    background-color: #f0f0f0;
-    border-radius: 4px;
-    margin: 10px 0;
-    position: relative;
-    height: 20px;
-    overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 1rem;
 }
 
 .progress-bar {
-    width: 0%;
-    height: 100%;
-    background-color: #007bff;
-    transition: width 0.3s ease;
-    position: absolute;
-    left: 0;
-    top: 0;
+    flex: 1;
+    height: 10px;
+    background-color: var(--background-color);
+    border-radius: 5px;
+    overflow: hidden;
 }
 
-.progress-text {
-    position: absolute;
-    width: 100%;
-    text-align: center;
-    color: #000;
-    z-index: 1;
-    font-size: 14px;
-    line-height: 20px;
+.progress {
+    height: 100%;
+    background-color: var(--primary-color);
+    width: 0;
+    transition: width 0.3s;
 }
 
 /* Files history styles */

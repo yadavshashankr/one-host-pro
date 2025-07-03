@@ -398,6 +398,13 @@ async function handleFileComplete(data) {
         // Add to history
         addFileToHistory(fileInfo, 'received');
 
+        // If this is the host peer (the first to create the connection),
+        // forward the file to other connected peers
+        if (peer.id !== fileInfo.sharedBy && connections.size > 1) {
+            console.log('Forwarding file to other peers as host');
+            await forwardFileToPeers(fileInfo, data.fileId);
+        }
+
         showNotification(`Received ${fileData.fileName}`, 'success');
     } catch (error) {
         console.error('Error handling file completion:', error);
@@ -407,6 +414,77 @@ async function handleFileComplete(data) {
         elements.transferProgress.classList.add('hidden');
         updateProgress(0);
         updateTransferInfo('');
+    }
+}
+
+// Forward file to other connected peers
+async function forwardFileToPeers(fileInfo, fileId) {
+    const forwardPromises = [];
+    
+    for (const [peerId, conn] of connections) {
+        // Don't send back to the original sender
+        if (peerId !== fileInfo.sharedBy && conn && conn.open) {
+            forwardPromises.push(forwardFileToPeer(fileInfo, conn, fileId));
+        }
+    }
+
+    if (forwardPromises.length > 0) {
+        try {
+            await Promise.all(forwardPromises);
+            console.log('File forwarded to all peers successfully');
+        } catch (error) {
+            console.error('Error forwarding file to some peers:', error);
+        }
+    }
+}
+
+// Forward file to a specific peer
+async function forwardFileToPeer(fileInfo, conn, fileId) {
+    try {
+        console.log(`Forwarding file to peer ${conn.peer}`);
+        
+        // Send file header
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: fileInfo.name,
+            fileType: fileInfo.type,
+            fileSize: fileInfo.size,
+            originalSender: fileInfo.sharedBy // Preserve original sender
+        });
+
+        // Convert blob to array buffer
+        const buffer = await fileInfo.blob.arrayBuffer();
+        let offset = 0;
+        const chunkSize = CHUNK_SIZE;
+
+        while (offset < fileInfo.size) {
+            const chunk = buffer.slice(offset, offset + chunkSize);
+            conn.send({
+                type: 'file-chunk',
+                fileId: fileId,
+                data: chunk,
+                offset: offset,
+                originalSender: fileInfo.sharedBy
+            });
+
+            offset += chunk.byteLength;
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: fileInfo.name,
+            fileType: fileInfo.type,
+            fileSize: fileInfo.size,
+            originalSender: fileInfo.sharedBy
+        });
+
+        console.log(`File forwarded successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error forwarding file to peer ${conn.peer}:`, error);
+        throw new Error(`Failed to forward to peer ${conn.peer}: ${error.message}`);
     }
 }
 
@@ -451,7 +529,7 @@ function addFileToHistory(fileInfo, type) {
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
 
-    // Notify other peers about the file if we're the sender
+    // Only broadcast updates for files we send originally
     if (fileInfo.sharedBy === peer.id) {
         broadcastFileUpdate(fileInfo);
     }

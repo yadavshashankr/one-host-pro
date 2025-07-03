@@ -50,6 +50,9 @@ const fileHistory = {
 let recentPeers = [];
 const MAX_RECENT_PEERS = 5;
 
+// Store file blobs for history
+let fileBlobs = new Map();
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -309,6 +312,9 @@ function setupConnectionHandlers(conn) {
                 await handleFileChunk(data);
             } else if (data.type === 'file-complete') {
                 await handleFileComplete(data);
+            } else if (data.type === 'file-history') {
+                console.log('Received file history');
+                await handleFileHistory(data.files);
             }
         } catch (error) {
             console.error('Data handling error:', error);
@@ -390,7 +396,7 @@ async function handleFileComplete(data) {
             size: fileData.fileSize,
             id: data.fileId,
             blob: blob,
-            sharedBy: fileData.originalSender
+            sharedBy: fileData.originalSender || data.originalSender
         };
 
         console.log('File received successfully:', fileInfo);
@@ -496,9 +502,18 @@ function updateTransferInfo(message) {
 }
 
 // Add file to history
-function addFileToHistory(fileInfo, type) {
+function addFileToHistory(fileInfo, type, shouldBroadcast = true) {
     const fileId = fileInfo.id || generateFileId(fileInfo);
     
+    // Store the blob for future peers
+    fileBlobs.set(fileId, {
+        name: fileInfo.name,
+        type: fileInfo.type,
+        size: fileInfo.size,
+        sharedBy: fileInfo.sharedBy,
+        blob: fileInfo.blob
+    });
+
     // Determine the correct type based on who shared the file
     const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
     
@@ -529,8 +544,8 @@ function addFileToHistory(fileInfo, type) {
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
 
-    // Only broadcast updates for files we send originally
-    if (fileInfo.sharedBy === peer.id) {
+    // Only broadcast updates if specified and we're the original sender
+    if (shouldBroadcast && fileInfo.sharedBy === peer.id) {
         broadcastFileUpdate(fileInfo);
     }
 }
@@ -1053,5 +1068,29 @@ elements.clearPeers.addEventListener('click', () => {
     updateRecentPeersList();
     elements.recentPeers.classList.add('hidden');
 });
+
+// Handle received file history
+async function handleFileHistory(files) {
+    for (const fileInfo of files) {
+        // Store the blob
+        fileBlobs.set(fileInfo.id, {
+            name: fileInfo.name,
+            type: fileInfo.type,
+            size: fileInfo.size,
+            sharedBy: fileInfo.sharedBy,
+            blob: fileInfo.blob
+        });
+
+        // Add to history without broadcasting
+        addFileToHistory({
+            id: fileInfo.id,
+            name: fileInfo.name,
+            type: fileInfo.type,
+            size: fileInfo.size,
+            sharedBy: fileInfo.sharedBy,
+            blob: fileInfo.blob
+        }, fileInfo.sharedBy === peer.id ? 'sent' : 'received', false);
+    }
+}
 
 init();

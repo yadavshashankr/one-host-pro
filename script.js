@@ -8,6 +8,7 @@ const STORE_NAME = 'files';
 const elements = {
     peerId: document.getElementById('peer-id'),
     copyId: document.getElementById('copy-id'),
+    shareId: document.getElementById('share-id'),
     remotePeerId: document.getElementById('remote-peer-id'),
     connectButton: document.getElementById('connect-button'),
     fileInput: document.getElementById('file-input'),
@@ -182,6 +183,37 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
+// Initialize share button if Web Share API is available
+function initShareButton() {
+    if (navigator.share) {
+        elements.shareId.classList.remove('hidden');
+        elements.shareId.addEventListener('click', shareId);
+    } else {
+        elements.shareId.classList.add('hidden');
+    }
+}
+
+// Share peer ID using Web Share API
+async function shareId() {
+    try {
+        const peerId = elements.peerId.textContent;
+        const shareUrl = `${window.location.origin}${window.location.pathname}?peer=${peerId}`;
+        const shareData = {
+            title: 'Connect to my P2P File Share',
+            text: `Connect to my peer using ID: ${peerId}`,
+            url: shareUrl
+        };
+
+        await navigator.share(shareData);
+        showNotification('Share successful!', 'success');
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            console.error('Error sharing:', error);
+            showNotification('Failed to share', 'error');
+        }
+    }
+}
+
 // Initialize PeerJS
 function initPeerJS() {
     try {
@@ -199,6 +231,7 @@ function initPeerJS() {
             elements.peerId.textContent = id;
             updateConnectionStatus('', 'Ready to connect');
             generateQRCode(id);
+            initShareButton(); // Initialize share button after getting peer ID
         });
 
         peer.on('connection', (conn) => {

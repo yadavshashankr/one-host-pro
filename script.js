@@ -199,8 +199,6 @@ async function shareId() {
         const peerId = elements.peerId.textContent;
         const shareUrl = `${window.location.origin}${window.location.pathname}?peer=${peerId}`;
         const shareData = {
-            title: 'Connect to my P2P File Share',
-            text: `Connect to my peer using ID: ${peerId}`,
             url: shareUrl
         };
 

@@ -346,71 +346,114 @@ function generateFileId(file) {
 
 // Handle file header data
 async function handleFileHeader(data) {
-    const fileId = generateFileId({ name: data.name, size: data.size });
-    fileChunks[fileId] = {
-        name: data.name,
-        type: data.fileType || 'application/octet-stream',
-        size: data.size,
+    console.log('Received file header:', data);
+    fileChunks[data.fileId] = {
         chunks: [],
-        receivedSize: 0
+        fileName: data.fileName,
+        fileType: data.fileType,
+        fileSize: data.fileSize,
+        receivedSize: 0,
+        originalSender: data.originalSender
     };
-    updateProgress(0);
-    elements.transferProgress.classList.remove('hidden');
+    updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
 }
 
 // Handle file chunk data
 async function handleFileChunk(data) {
-    try {
-        const fileId = generateFileId({ name: data.name, size: data.size });
-        const fileData = fileChunks[fileId];
-        if (fileData) {
-            fileData.chunks.push(data.data);
-            fileData.receivedSize += data.data.byteLength;
-            
-            const progress = Math.floor((fileData.receivedSize / fileData.size) * 100);
-            updateProgress(progress);
-        }
-    } catch (error) {
-        console.error('Error handling file chunk:', error);
-        showNotification('Error processing file chunk', 'error');
-    }
+    const fileData = fileChunks[data.fileId];
+    if (!fileData) return;
+
+    fileData.chunks[data.offset] = data.data;
+    fileData.receivedSize += data.data.byteLength;
+    
+    const progress = (fileData.receivedSize / fileData.fileSize) * 100;
+    updateProgress(progress);
 }
 
 // Handle file completion
 async function handleFileComplete(data) {
+    const fileData = fileChunks[data.fileId];
+    if (!fileData) return;
+
     try {
-        const fileId = generateFileId({ name: data.name, size: data.size });
-        const fileData = fileChunks[fileId];
-        if (!fileData) {
-            console.error('No file data found for:', data.name);
-            return;
-        }
-
-        // Verify if we received all the data
-        if (fileData.receivedSize !== fileData.size) {
-            throw new Error('Incomplete file transfer');
-        }
-
-        const blob = new Blob(fileData.chunks, { type: fileData.type });
+        // Combine chunks
+        const chunks = fileData.chunks.filter(chunk => chunk);
+        const blob = new Blob(chunks, { type: fileData.fileType });
         const url = URL.createObjectURL(blob);
-        
-        // Create a file object with the received data
-        const file = new File([blob], fileData.name, { 
-            type: fileData.type,
-            lastModified: new Date().getTime()
+
+        // Add to received files history
+        addFileToHistory({
+            name: fileData.fileName,
+            type: fileData.fileType,
+            size: fileData.fileSize,
+            id: data.fileId
+        }, 'received', url);
+
+        // Forward the file to other peers if we're not the original recipient
+        if (data.originalSender !== peer.id) {
+            for (const [peerId, conn] of connections) {
+                // Don't send back to the original sender or the peer we received from
+                if (peerId !== data.originalSender && conn && conn.open) {
+                    forwardFile(data.fileId, fileData, conn);
+                }
+            }
+        }
+
+        showNotification(`Received ${fileData.fileName}`, 'success');
+        updateTransferInfo('');
+        delete fileChunks[data.fileId];
+    } catch (error) {
+        console.error('Error handling file completion:', error);
+        showNotification('Error processing received file', 'error');
+    }
+}
+
+// Forward received file to other peers
+async function forwardFile(fileId, fileData, conn) {
+    try {
+        // Send file header
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: fileData.fileName,
+            fileType: fileData.fileType,
+            fileSize: fileData.fileSize,
+            originalSender: fileData.originalSender
         });
 
-        // Add to history with the URL for downloading
-        addFileToHistory(file, 'received', url);
-        
-        // Clean up
-        delete fileChunks[fileId];
-        elements.transferProgress.classList.add('hidden');
-        showNotification(`File "${file.name}" received successfully`, 'success');
+        // Send chunks
+        for (let i = 0; i < fileData.chunks.length; i++) {
+            if (fileData.chunks[i]) {
+                conn.send({
+                    type: 'file-chunk',
+                    fileId: fileId,
+                    data: fileData.chunks[i],
+                    offset: i * CHUNK_SIZE,
+                    originalSender: fileData.originalSender
+                });
+            }
+        }
+
+        // Send completion
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: fileData.fileName,
+            fileType: fileData.fileType,
+            fileSize: fileData.fileSize,
+            originalSender: fileData.originalSender
+        });
+
+        console.log(`Forwarded file ${fileData.fileName} to peer ${conn.peer}`);
     } catch (error) {
-        console.error('Error completing file transfer:', error);
-        showNotification('Error processing received file', 'error');
-        elements.transferProgress.classList.add('hidden');
+        console.error(`Error forwarding file to peer ${conn.peer}:`, error);
+    }
+}
+
+// Update transfer info display
+function updateTransferInfo(message) {
+    if (elements.transferInfo) {
+        elements.transferInfo.textContent = message;
     }
 }
 
@@ -428,18 +471,20 @@ async function sendFile(file) {
 
     try {
         transferInProgress = true;
-        updateProgress(0);
         elements.transferProgress.classList.remove('hidden');
 
+        // Generate a unique file ID that will be same for all recipients
+        const fileId = generateFileId(file);
+        
         // Send to all connected peers
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 console.log('Sending file to peer:', peerId);
-                await sendFileToPeer(file, conn);
+                await sendFileToPeer(file, conn, fileId);
             }
         }
 
-        showNotification('File sent successfully to all connected peers', 'success');
+        showNotification(`File sent successfully to ${connections.size} peer(s)`, 'success');
     } catch (error) {
         console.error('File send error:', error);
         showNotification('Failed to send file', 'error');
@@ -449,55 +494,52 @@ async function sendFile(file) {
     }
 }
 
-// New function to handle sending file to a specific peer
-async function sendFileToPeer(file, conn) {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const fileId = generateFileId(file);
+// Send file to a specific peer
+async function sendFileToPeer(file, conn, fileId) {
+    try {
+        // Send file header to peer
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id // Add original sender information
+        });
+
+        let offset = 0;
+        while (offset < file.size) {
+            const chunk = await readFileChunk(file, offset, offset + CHUNK_SIZE);
             
-            // Send file header
+            // Send chunk with file ID
             conn.send({
-                type: 'file-header',
-                name: file.name,
-                size: file.size,
-                fileType: file.type || 'application/octet-stream'
+                type: 'file-chunk',
+                fileId: fileId,
+                data: chunk,
+                offset: offset,
+                originalSender: peer.id
             });
 
-            // Read and send file chunks
-            let offset = 0;
-            while (offset < file.size) {
-                const chunk = await readFileChunk(file, offset, offset + CHUNK_SIZE);
-                conn.send({
-                    type: 'file-chunk',
-                    name: file.name,
-                    size: file.size,
-                    data: chunk
-                });
-                offset += chunk.byteLength;
-                if (!transferInProgress) break; // Stop if transfer was cancelled
-                updateProgress((offset / file.size) * 100);
-                // Add a small delay to prevent overwhelming the connection
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-
-            if (transferInProgress) {
-                // Send completion message
-                conn.send({
-                    type: 'file-complete',
-                    name: file.name,
-                    size: file.size
-                });
-
-                // Add to sent files history
-                addFileToHistory(file, 'sent', URL.createObjectURL(file));
-                resolve();
-            } else {
-                reject(new Error('Transfer cancelled'));
-            }
-        } catch (error) {
-            reject(error);
+            offset += chunk.byteLength;
+            const progress = Math.min((offset / file.size) * 100, 100);
+            updateProgress(progress);
         }
-    });
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        });
+
+        // Add to file history
+        addFileToHistory(file, 'sent');
+    } catch (error) {
+        throw new Error(`Failed to send file to peer ${conn.peer}: ${error.message}`);
+    }
 }
 
 // Helper function to read file chunks

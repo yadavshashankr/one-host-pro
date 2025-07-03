@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.svg" alt="One-Host Logo" width="200">
+  <img src="assets/logo.svg" alt="One-Host Logo" width="400">
 </div>
 
 A modern, secure peer-to-peer file sharing web application that enables direct file transfer between browsers using WebRTC technology. No server needed - files are sent directly between peers.

@@ -297,10 +297,11 @@ function setupConnectionHandlers(conn) {
             if (data.type === 'connection-notification') {
                 updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
             } else if (data.type === 'file-history-update') {
+                // Handle file history update
                 const fileId = data.fileInfo.id;
-                const type = data.historyType === 'sent' ? 'received' : 'sent';
+                const type = data.historyType;
                 
-                // Only update if file doesn't exist in history
+                // Only add if not already in history
                 if (!fileHistory[type].has(fileId)) {
                     fileHistory[type].add(fileId);
                     const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
@@ -384,13 +385,17 @@ async function handleFileComplete(data) {
         fileData.blob = blob;
 
         // Add to received files history without URL
-        addFileToHistory({
+        const fileInfo = {
             name: fileData.fileName,
             type: fileData.fileType,
             size: fileData.fileSize,
             id: data.fileId,
-            blob: blob // Store blob reference
-        }, 'received');
+            blob: blob, // Store blob reference
+            sharedBy: fileData.originalSender // Add sender information
+        };
+
+        // Add to history and update UI
+        addFileToHistory(fileInfo, 'received');
 
         // Forward the file to other peers if we're not the original recipient
         if (data.originalSender !== peer.id) {
@@ -538,8 +543,16 @@ async function sendFileToPeer(file, conn, fileId) {
             originalSender: peer.id
         });
 
-        // Add to file history
-        addFileToHistory(file, 'sent');
+        // Add to file history for sender
+        const fileInfo = {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            id: fileId,
+            blob: new Blob([await file.arrayBuffer()]), // Store blob for sender
+            sharedBy: peer.id
+        };
+        addFileToHistory(fileInfo, 'sent');
     } catch (error) {
         throw new Error(`Failed to send file to peer ${conn.peer}: ${error.message}`);
     }
@@ -829,27 +842,41 @@ function addFileToHistory(fileInfo, type) {
     updateFilesList(listElement, fileInfo, type);
     
     // Notify other peers about the file history update
+    broadcastFileHistory(fileInfo, type);
+}
+
+// Broadcast file history to all connected peers
+function broadcastFileHistory(fileInfo, type) {
+    const historyUpdate = {
+        type: 'file-history-update',
+        fileInfo: {
+            id: fileInfo.id,
+            name: fileInfo.name,
+            type: fileInfo.type,
+            size: fileInfo.size,
+            sharedBy: fileInfo.sharedBy
+        },
+        historyType: type
+    };
+
     for (const conn of connections.values()) {
         if (conn.open) {
-            conn.send({
-                type: 'file-history-update',
-                fileInfo: {
-                    id: fileId,
-                    name: fileInfo.name,
-                    type: fileInfo.type,
-                    size: fileInfo.size,
-                    blob: fileInfo.blob // Include blob for received files
-                },
-                historyType: type
-            });
+            conn.send(historyUpdate);
         }
     }
 }
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
+    // Check if file already exists in list
+    const existingFile = Array.from(listElement.children).find(li => 
+        li.getAttribute('data-file-id') === fileInfo.id
+    );
+    if (existingFile) return; // Skip if already in list
+
     const li = document.createElement('li');
     li.className = 'file-item';
+    li.setAttribute('data-file-id', fileInfo.id);
     
     const icon = document.createElement('span');
     icon.className = 'material-icons';
@@ -865,9 +892,14 @@ function updateFilesList(listElement, fileInfo, type) {
     const sizeSpan = document.createElement('span');
     sizeSpan.className = 'file-size';
     sizeSpan.textContent = formatFileSize(fileInfo.size);
+
+    const sharedBySpan = document.createElement('span');
+    sharedBySpan.className = 'shared-by';
+    sharedBySpan.textContent = `Shared by: ${fileInfo.sharedBy || 'Unknown'}`;
     
     info.appendChild(nameSpan);
     info.appendChild(sizeSpan);
+    info.appendChild(sharedBySpan);
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';

@@ -681,7 +681,7 @@ async function sendFile(file) {
     }
 }
 
-// Update progress bar and text
+// Update progress bar
 function updateProgress(percent) {
     if (!transferInProgress) return;
     const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
@@ -842,11 +842,6 @@ elements.fileInput.addEventListener('change', (e) => {
         showNotification('Please connect to at least one peer first', 'error');
     }
 });
-
-// Add a helper function for updating progress
-function updateProgress(progress) {
-    elements.progress.style.width = `${progress}%`;
-}
 
 // Initialize the application
 function init() {

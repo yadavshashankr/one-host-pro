@@ -296,14 +296,12 @@ function setupConnectionHandlers(conn) {
         try {
             if (data.type === 'connection-notification') {
                 updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
-            } else if (data.type === 'file-history-update') {
-                // Only process history updates for files we don't have
+            } else if (data.type === 'file-update') {
+                // Handle file update notification
+                console.log('Received file update:', data.fileInfo);
                 const fileId = data.fileInfo.id;
                 if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
-                    const type = data.fileInfo.sharedBy === peer.id ? 'sent' : 'received';
-                    fileHistory[type].add(fileId);
-                    const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
-                    updateFilesList(listElement, data.fileInfo, type);
+                    addFileToHistory(data.fileInfo, 'received');
                 }
             } else if (data.type === 'file-header') {
                 await handleFileHeader(data);
@@ -395,10 +393,10 @@ async function handleFileComplete(data) {
             sharedBy: fileData.originalSender
         };
 
-        // Add to history only if we haven't processed this file before
-        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-            addFileToHistory(fileInfo, 'received');
-        }
+        console.log('File received successfully:', fileInfo);
+
+        // Add to history
+        addFileToHistory(fileInfo, 'received');
 
         showNotification(`Received ${fileData.fileName}`, 'success');
     } catch (error) {
@@ -452,6 +450,31 @@ function addFileToHistory(fileInfo, type) {
     // Update UI with the correct list
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
+
+    // Notify other peers about the file if we're the sender
+    if (fileInfo.sharedBy === peer.id) {
+        broadcastFileUpdate(fileInfo);
+    }
+}
+
+// Broadcast file update to all peers
+function broadcastFileUpdate(fileInfo) {
+    const updateData = {
+        type: 'file-update',
+        fileInfo: {
+            id: fileInfo.id,
+            name: fileInfo.name,
+            type: fileInfo.type,
+            size: fileInfo.size,
+            sharedBy: fileInfo.sharedBy
+        }
+    };
+
+    for (const conn of connections.values()) {
+        if (conn.open) {
+            conn.send(updateData);
+        }
+    }
 }
 
 // Send file to a specific peer
@@ -845,9 +868,14 @@ function updateConnectionStatus(status, message) {
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
+    console.log('Updating files list:', { type, fileInfo });
+    
     // Check if file already exists in this list
     const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
-    if (existingFile) return;
+    if (existingFile) {
+        console.log('File already exists in list, updating...');
+        existingFile.remove();
+    }
 
     const li = document.createElement('li');
     li.className = 'file-item';
@@ -881,7 +909,7 @@ function updateFilesList(listElement, fileInfo, type) {
     downloadBtn.innerHTML = '<span class="material-icons">download</span>';
     downloadBtn.onclick = () => {
         if (fileInfo.blob) {
-            // Create URL only when downloading
+            console.log('Downloading file:', fileInfo);
             const url = URL.createObjectURL(fileInfo.blob);
             const a = document.createElement('a');
             a.href = url;
@@ -889,9 +917,9 @@ function updateFilesList(listElement, fileInfo, type) {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            // Revoke URL immediately after download starts
             setTimeout(() => URL.revokeObjectURL(url), 100);
         } else {
+            console.error('No blob available for file:', fileInfo);
             showNotification('File data not available for download', 'error');
         }
     };
@@ -906,6 +934,8 @@ function updateFilesList(listElement, fileInfo, type) {
     } else {
         listElement.appendChild(li);
     }
+    
+    console.log('File list updated successfully');
 }
 
 // Add function to get appropriate file icon

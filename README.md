@@ -1,5 +1,3 @@
-# One-Host
-
 <div align="center">
   <img src="assets/logo.svg" alt="One-Host Logo" width="200">
 </div>

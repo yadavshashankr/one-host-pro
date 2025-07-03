@@ -50,9 +50,6 @@ const fileHistory = {
 let recentPeers = [];
 const MAX_RECENT_PEERS = 5;
 
-// Store file blobs for history
-let fileBlobs = new Map();
-
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -212,252 +209,136 @@ async function shareId() {
     }
 }
 
-// Setup peer
-function setupPeer() {
+// Initialize PeerJS
+function initPeerJS() {
     try {
-        // Using the free public PeerJS server instead of custom server
-        peer = new Peer(undefined, {
-            host: '0.peerjs.com',
-            secure: true,
-            port: 443
+        peer = new Peer({
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
         });
 
         peer.on('open', (id) => {
-            console.log('My peer ID is:', id);
             elements.peerId.textContent = id;
-            updateConnectionStatus();
-            setupQRCode(id);
+            updateConnectionStatus('', 'Ready to connect');
+            generateQRCode(id);
+            initShareButton(); // Initialize share button after getting peer ID
         });
 
         peer.on('connection', (conn) => {
             console.log('Incoming connection from:', conn.peer);
+            connections.set(conn.peer, conn);
             updateConnectionStatus('connecting', 'Incoming connection...');
-            handleConnection(conn);
+            setupConnectionHandlers(conn);
         });
 
-        peer.on('error', (err) => {
-            console.error('Peer error:', err);
-            if (err.type === 'peer-unavailable') {
-                showNotification('Peer not found or unavailable', 'error');
-            } else if (err.type === 'network') {
-                showNotification('Network connection error', 'error');
-            } else if (err.type === 'disconnected') {
-                showNotification('Disconnected from server', 'error');
-                peer.reconnect();
-            } else {
-                showNotification('Connection error: ' + err.message, 'error');
+        peer.on('error', (error) => {
+            console.error('PeerJS Error:', error);
+            let errorMessage = 'Connection error';
+            
+            // Handle specific error types
+            if (error.type === 'peer-unavailable') {
+                errorMessage = 'Peer is not available or does not exist';
+            } else if (error.type === 'network') {
+                errorMessage = 'Network connection error';
+            } else if (error.type === 'disconnected') {
+                errorMessage = 'Disconnected from server';
+            } else if (error.type === 'server-error') {
+                errorMessage = 'Server error occurred';
             }
-            updateConnectionStatus('error', 'Connection error');
+            
+            updateConnectionStatus('', errorMessage);
+            showNotification(errorMessage, 'error');
+            resetConnection();
         });
 
         peer.on('disconnected', () => {
-            console.log('Disconnected from server, attempting to reconnect...');
-            updateConnectionStatus('connecting', 'Reconnecting to server...');
-            peer.reconnect();
+            console.log('Peer disconnected');
+            updateConnectionStatus('', 'Disconnected');
+            isConnectionReady = false;
+            
+            // Try to reconnect
+            setTimeout(() => {
+                if (peer && peer.disconnected) {
+                    console.log('Attempting to reconnect...');
+                    peer.reconnect();
+                }
+            }, 3000);
         });
-
-        peer.on('close', () => {
-            console.log('Connection to server closed');
-            updateConnectionStatus('disconnected', 'Connection closed');
-            connections.clear();
-            elements.fileTransferSection.classList.add('hidden');
-        });
-
     } catch (error) {
-        console.error('Error setting up peer:', error);
-        showNotification('Failed to initialize connection: ' + error.message, 'error');
-        updateConnectionStatus('error', 'Setup failed');
+        console.error('PeerJS Initialization Error:', error);
+        updateConnectionStatus('', 'Initialization failed');
+        showNotification('Failed to initialize peer connection', 'error');
     }
 }
 
-// Connect to a peer
-function connectToPeer(remotePeerId) {
-    if (!peer || !remotePeerId) {
-        showNotification('Invalid peer ID', 'error');
-        return;
-    }
-
-    if (peer.disconnected) {
-        console.log('Peer disconnected, attempting to reconnect...');
-        peer.reconnect();
-        showNotification('Reconnecting to server...', 'warning');
-        return;
-    }
-
-    if (connections.has(remotePeerId)) {
-        showNotification('Already connected to this peer', 'warning');
-        return;
-    }
-
-    try {
-        console.log('Initiating connection to:', remotePeerId);
-        updateConnectionStatus('connecting', 'Connecting...');
-        
-        const conn = peer.connect(remotePeerId, {
-            reliable: true,
-            serialization: 'json',
-            debug: 3
-        });
-
-        if (!conn) {
-            throw new Error('Failed to create connection');
-        }
-
-        // Add timeout for connection attempt
-        const connectionTimeout = setTimeout(() => {
-            if (!connections.has(remotePeerId)) {
-                console.log('Connection attempt timed out');
-                updateConnectionStatus('error', 'Connection timed out');
-                showNotification('Connection attempt timed out', 'error');
-                conn.close();
-            }
-        }, 15000); // 15 second timeout
-
-        conn.on('open', () => {
-            clearTimeout(connectionTimeout);
-        });
-
-        handleConnection(conn);
-    } catch (error) {
-        console.error('Error connecting to peer:', error);
-        updateConnectionStatus('error', 'Connection failed');
-        showNotification('Failed to connect: ' + error.message, 'error');
-    }
-}
-
-// Handle new peer connection
-function handleConnection(conn) {
-    console.log('Setting up connection with peer:', conn.peer);
-    
-    // Wait for the connection to be ready
+// Setup connection event handlers
+function setupConnectionHandlers(conn) {
     conn.on('open', () => {
-        console.log('Connection opened with peer:', conn.peer);
-        connections.set(conn.peer, conn);
+        console.log('Connection opened with:', conn.peer);
+        isConnectionReady = true;
         updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
         elements.fileTransferSection.classList.remove('hidden');
-        addToRecentPeers(conn.peer);
-
-        // Send existing file history to new peer
-        setTimeout(() => {
-            sendFileHistoryToPeer(conn);
-        }, 1000); // Give a small delay to ensure connection is stable
+        addRecentPeer(conn.peer);
+        
+        // Send a connection notification to the other peer
+        conn.send({
+            type: 'connection-notification',
+            peerId: peer.id
+        });
     });
 
-    conn.on('data', handleDataReceived);
-    
+    conn.on('data', async (data) => {
+        try {
+            if (data.type === 'connection-notification') {
+                updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+            } else if (data.type === 'file-update') {
+                // Handle file update notification
+                console.log('Received file update:', data.fileInfo);
+                const fileId = data.fileInfo.id;
+                if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
+                    addFileToHistory(data.fileInfo, 'received');
+                }
+            } else if (data.type === 'file-header') {
+                await handleFileHeader(data);
+            } else if (data.type === 'file-chunk') {
+                await handleFileChunk(data);
+            } else if (data.type === 'file-complete') {
+                await handleFileComplete(data);
+            }
+        } catch (error) {
+            console.error('Data handling error:', error);
+            showNotification('Error processing received data', 'error');
+        }
+    });
+
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
-        updateConnectionStatus(
-            connections.size > 0 ? 'connected' : 'disconnected',
-            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected'
-        );
+        updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected');
         if (connections.size === 0) {
-            elements.fileTransferSection.classList.add('hidden');
-            showNotification('Disconnected from peer', 'warning');
-        }
-    });
-
-    conn.on('error', (err) => {
-        console.error('Connection error:', err);
-        connections.delete(conn.peer);
-        updateConnectionStatus('error', 'Connection error occurred');
-        showNotification('Connection error: ' + err.message, 'error');
-    });
-}
-
-// Send file history to newly connected peer
-function sendFileHistoryToPeer(conn) {
-    try {
-        const historyData = {
-            type: 'file-history',
-            files: []
-        };
-
-        console.log('Preparing file history to send. FileBlobs size:', fileBlobs.size);
-
-        // Collect all files from fileBlobs
-        for (const [fileId, fileData] of fileBlobs.entries()) {
-            console.log('Adding file to history:', fileId, fileData.name);
-            historyData.files.push({
-                id: fileId,
-                name: fileData.name,
-                type: fileData.type,
-                size: fileData.size,
-                sharedBy: fileData.sharedBy,
-                blob: fileData.blob
-            });
-        }
-
-        if (historyData.files.length > 0) {
-            console.log(`Sending file history to peer ${conn.peer}. Total files:`, historyData.files.length);
-            conn.send(historyData);
+            showNotification('All peers disconnected', 'error');
         } else {
-            console.log('No file history to send');
+            showNotification(`Peer ${conn.peer} disconnected`, 'warning');
         }
-    } catch (error) {
-        console.error('Error sending file history:', error);
-    }
+    });
+
+    conn.on('error', (error) => {
+        console.error('Connection Error:', error);
+        updateConnectionStatus('', 'Connection error');
+        showNotification('Connection error occurred', 'error');
+        resetConnection();
+    });
 }
 
-// Handle received data
-async function handleDataReceived(data) {
-    try {
-        console.log('Received data type:', data.type);
-        
-        if (data.type === 'file-history') {
-            console.log('Received file history with', data.files.length, 'files');
-            await handleFileHistory(data.files);
-            return;
-        }
-
-        if (data.type === 'file-header') {
-            handleFileHeader(data);
-        } else if (data.type === 'file-chunk') {
-            handleFileChunk(data);
-        } else if (data.type === 'file-complete') {
-            await handleFileComplete(data);
-        }
-    } catch (error) {
-        console.error('Error handling received data:', error);
-        showNotification('Error processing received data', 'error');
-    }
-}
-
-// Handle received file history
-async function handleFileHistory(files) {
-    console.log('Processing received file history:', files.length, 'files');
-    
-    for (const fileInfo of files) {
-        try {
-            console.log('Processing historical file:', fileInfo.name);
-            
-            // Store the blob
-            fileBlobs.set(fileInfo.id, {
-                name: fileInfo.name,
-                type: fileInfo.type,
-                size: fileInfo.size,
-                sharedBy: fileInfo.sharedBy,
-                blob: fileInfo.blob
-            });
-
-            // Add to history without broadcasting
-            const historyType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
-            console.log(`Adding file ${fileInfo.name} to ${historyType} history`);
-            
-            addFileToHistory({
-                id: fileInfo.id,
-                name: fileInfo.name,
-                type: fileInfo.type,
-                size: fileInfo.size,
-                sharedBy: fileInfo.sharedBy,
-                blob: fileInfo.blob
-            }, historyType, false);
-        } catch (error) {
-            console.error('Error processing historical file:', fileInfo.name, error);
-        }
-    }
-    console.log('Finished processing file history');
+// Helper function to generate unique file ID
+function generateFileId(file) {
+    return `${file.name}-${file.size}`;
 }
 
 // Handle file header
@@ -509,7 +390,7 @@ async function handleFileComplete(data) {
             size: fileData.fileSize,
             id: data.fileId,
             blob: blob,
-            sharedBy: fileData.originalSender || data.originalSender
+            sharedBy: fileData.originalSender
         };
 
         console.log('File received successfully:', fileInfo);
@@ -615,18 +496,9 @@ function updateTransferInfo(message) {
 }
 
 // Add file to history
-function addFileToHistory(fileInfo, type, shouldBroadcast = true) {
+function addFileToHistory(fileInfo, type) {
     const fileId = fileInfo.id || generateFileId(fileInfo);
     
-    // Store the blob for future peers
-    fileBlobs.set(fileId, {
-        name: fileInfo.name,
-        type: fileInfo.type,
-        size: fileInfo.size,
-        sharedBy: fileInfo.sharedBy,
-        blob: fileInfo.blob
-    });
-
     // Determine the correct type based on who shared the file
     const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
     
@@ -657,8 +529,8 @@ function addFileToHistory(fileInfo, type, shouldBroadcast = true) {
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
 
-    // Only broadcast updates if specified and we're the original sender
-    if (shouldBroadcast && fileInfo.sharedBy === peer.id) {
+    // Only broadcast updates for files we send originally
+    if (fileInfo.sharedBy === peer.id) {
         broadcastFileUpdate(fileInfo);
     }
 }
@@ -934,13 +806,29 @@ elements.copyId.addEventListener('click', () => {
 });
 
 elements.connectButton.addEventListener('click', () => {
-    const remotePeerId = elements.remotePeerId.value.trim();
-    if (remotePeerId) {
-        connectToPeer(remotePeerId);
-        elements.remotePeerId.value = '';
-        elements.recentPeers.classList.add('hidden');
-    } else {
-        showNotification('Please enter a peer ID', 'error');
+    const remotePeerIdValue = elements.remotePeerId.value.trim();
+    if (!remotePeerIdValue) {
+        showNotification('Please enter a Peer ID', 'error');
+        return;
+    }
+
+    if (connections.has(remotePeerIdValue)) {
+        showNotification('Already connected to this peer', 'warning');
+        return;
+    }
+
+    try {
+        console.log('Attempting to connect to:', remotePeerIdValue);
+        updateConnectionStatus('connecting', 'Connecting...');
+        const newConnection = peer.connect(remotePeerIdValue, {
+            reliable: true
+        });
+        connections.set(remotePeerIdValue, newConnection);
+        setupConnectionHandlers(newConnection);
+    } catch (error) {
+        console.error('Connection attempt error:', error);
+        showNotification('Failed to establish connection', 'error');
+        updateConnectionStatus('', 'Connection failed');
     }
 });
 
@@ -995,20 +883,15 @@ function updateProgress(progress) {
 }
 
 // Initialize the application
-async function init() {
-    try {
-        // Check WebRTC support
-        if (!window.RTCPeerConnection) {
-            elements.browserSupport.classList.remove('hidden');
-        }
-
-        setupPeer();
-        setupEventListeners();
-        setupDropZone();
-    } catch (error) {
-        console.error('Initialization error:', error);
-        showNotification('Failed to initialize application', 'error');
+function init() {
+    if (!checkBrowserSupport()) {
+        return;
     }
+
+    initPeerJS();
+    initIndexedDB();
+    loadRecentPeers();
+    checkUrlForPeerId(); // Check URL for peer ID on load
 }
 
 // Add CSS classes for notification styling
@@ -1048,126 +931,80 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-// Update connection status
-function updateConnectionStatus(status = '', message = '') {
-    const statusDot = elements.statusDot;
-    const statusText = elements.statusText;
-
-    switch (status) {
-        case 'connected':
-            statusDot.className = 'status-dot connected';
-            statusText.textContent = message || 'Connected';
-            break;
-        case 'connecting':
-            statusDot.className = 'status-dot connecting';
-            statusText.textContent = message || 'Connecting...';
-            break;
-        case 'disconnected':
-            statusDot.className = 'status-dot';
-            statusText.textContent = message || 'Disconnected';
-            elements.fileTransferSection.classList.add('hidden');
-            break;
-        case 'error':
-            statusDot.className = 'status-dot error';
-            statusText.textContent = message || 'Error';
-            elements.fileTransferSection.classList.add('hidden');
-            break;
-        default:
-            if (connections.size > 0) {
-                statusDot.className = 'status-dot connected';
-                statusText.textContent = `Connected to ${connections.size} peer(s)`;
-            } else {
-                statusDot.className = 'status-dot';
-                statusText.textContent = 'Ready to connect';
-            }
+// Add function to update connection status
+function updateConnectionStatus(status, message) {
+    elements.statusDot.className = 'status-dot ' + (status || '');
+    elements.statusText.textContent = message;
+    
+    // Update title to show number of connections
+    if (connections && connections.size > 0) {
+        document.title = `(${connections.size}) P2P File Share`;
+    } else {
+        document.title = 'P2P File Share';
     }
 }
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
-    console.log('Updating files list:', { type, fileInfo });
-    
-    // Check if file already exists in this list
-    const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
-    if (existingFile) {
-        console.log('File already exists in list, updating...');
-        existingFile.remove();
-    }
-
     const li = document.createElement('li');
-    li.className = 'file-item';
-    li.setAttribute('data-file-id', fileInfo.id);
     
-    const icon = document.createElement('span');
-    icon.className = 'material-icons';
-    icon.textContent = getFileIcon(fileInfo.type);
+    // Format file size
+    const formattedSize = formatFileSize(fileInfo.size);
     
-    const info = document.createElement('div');
-    info.className = 'file-info';
+    // Create file icon based on type
+    const fileIcon = getFileIcon(fileInfo.type);
     
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'file-name';
-    nameSpan.textContent = fileInfo.name;
+    // Create sender/receiver text
+    const peerText = type === 'sent' ? 'Sent to peers' : `Received from ${fileInfo.sharedBy}`;
     
-    const sizeSpan = document.createElement('span');
-    sizeSpan.className = 'file-size';
-    sizeSpan.textContent = formatFileSize(fileInfo.size);
-
-    const sharedBySpan = document.createElement('span');
-    sharedBySpan.className = 'shared-by';
-    sharedBySpan.textContent = `Shared by: ${fileInfo.sharedBy || 'Unknown'}`;
+    li.innerHTML = `
+        <span class="material-icons file-icon">${fileIcon}</span>
+        <div class="file-info">
+            <div class="file-name">${fileInfo.name}</div>
+            <div class="file-meta">
+                <span class="file-size">${formattedSize}</span>
+                <span class="file-peer">${peerText}</span>
+            </div>
+        </div>
+        <button class="download-button" title="Download file">
+            <span class="material-icons">download</span>
+        </button>
+    `;
     
-    info.appendChild(nameSpan);
-    info.appendChild(sizeSpan);
-    info.appendChild(sharedBySpan);
+    li.dataset.fileId = fileInfo.id;
     
-    const downloadBtn = document.createElement('button');
-    downloadBtn.className = 'icon-button';
-    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
-    downloadBtn.onclick = () => {
-        if (fileInfo.blob) {
-            console.log('Downloading file:', fileInfo);
-            const url = URL.createObjectURL(fileInfo.blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileInfo.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 100);
-        } else {
-            console.error('No blob available for file:', fileInfo);
-            showNotification('File data not available for download', 'error');
-        }
-    };
+    // Add download handler
+    const downloadButton = li.querySelector('.download-button');
+    downloadButton.addEventListener('click', () => {
+        downloadFile(fileInfo);
+    });
     
-    li.appendChild(icon);
-    li.appendChild(info);
-    li.appendChild(downloadBtn);
-    
-    // Add to the beginning of the list for newest first
-    if (listElement.firstChild) {
-        listElement.insertBefore(li, listElement.firstChild);
-    } else {
-        listElement.appendChild(li);
-    }
-    
-    console.log('File list updated successfully');
+    // Add to list
+    listElement.insertBefore(li, listElement.firstChild);
 }
 
-// Add function to get appropriate file icon
+// Format file size
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Get appropriate icon based on file type
 function getFileIcon(mimeType) {
     if (!mimeType) return 'insert_drive_file';
     
     if (mimeType.startsWith('image/')) return 'image';
     if (mimeType.startsWith('video/')) return 'movie';
     if (mimeType.startsWith('audio/')) return 'audiotrack';
+    if (mimeType.startsWith('text/')) return 'description';
     if (mimeType.includes('pdf')) return 'picture_as_pdf';
-    if (mimeType.includes('word') || mimeType.includes('document')) return 'description';
-    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_chart';
+    if (mimeType.includes('word') || mimeType.includes('document')) return 'article';
+    if (mimeType.includes('sheet') || mimeType.includes('excel')) return 'table_chart';
     if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'slideshow';
-    if (mimeType.includes('text/')) return 'text_snippet';
-    if (mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
+    if (mimeType.includes('compressed') || mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
     
     return 'insert_drive_file';
 }

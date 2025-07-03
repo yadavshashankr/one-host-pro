@@ -1,6 +1,10 @@
-# WebRTC File Sharing
+# One-Host
 
-A peer-to-peer file sharing web application that allows direct file transfer between browsers using WebRTC technology. No server is needed for file transfer - files are sent directly between peers.
+<div align="center">
+  <img src="assets/logo.svg" alt="One-Host Logo" width="200">
+</div>
+
+A modern, secure peer-to-peer file sharing web application that enables direct file transfer between browsers using WebRTC technology. No server needed - files are sent directly between peers.
 
 ![Status](https://img.shields.io/badge/status-active-success.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -22,11 +26,14 @@ A peer-to-peer file sharing web application that allows direct file transfer bet
 
 ## 🚀 Quick Start
 
-1. Open the application in your browser: [Live Demo](https://yadavshashankr.github.io/local-host/)
+1. Open the application in your browser: [Live Demo](https://yadavshashankr.github.io/one-host/)
 2. You'll see your unique Peer ID
-3. Share your Peer ID with someone you want to connect with
+3. Share your Peer ID with someone you want to connect with:
+   - Copy using the copy button
+   - Share via the share button (mobile)
+   - Or let others scan your QR code
 4. Enter their Peer ID to connect
-5. Once connected, you can:
+5. Once connected (green status indicator), you can:
    - Click or drag files to send
    - View transfer progress
    - See file history
@@ -98,8 +105,8 @@ A peer-to-peer file sharing web application that allows direct file transfer bet
 
 - Built with vanilla JavaScript
 - Uses PeerJS for WebRTC implementation
-- Implements chunked file transfer
-- Supports all modern browsers
+- Implements chunked file transfer (16KB chunks)
+- IndexedDB for file storage
 - Mobile-responsive design
 - No backend required
 
@@ -124,4 +131,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/yadavshashankr/local-host/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/yadavshashankr/one-host/issues).

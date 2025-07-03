@@ -352,9 +352,10 @@ async function handleFileHeader(data) {
         fileType: data.fileType,
         fileSize: data.fileSize,
         receivedSize: 0,
-        originalSender: data.originalSender,
-        totalChunks: Math.ceil(data.fileSize / CHUNK_SIZE)
+        originalSender: data.originalSender
     };
+    elements.transferProgress.classList.remove('hidden');
+    updateProgress(0);
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
 }
 
@@ -363,9 +364,7 @@ async function handleFileChunk(data) {
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
-    // Store chunk at the correct index
-    const chunkIndex = Math.floor(data.offset / CHUNK_SIZE);
-    fileData.chunks[chunkIndex] = data.data;
+    fileData.chunks.push(data.data);
     fileData.receivedSize += data.data.byteLength;
     
     const progress = (fileData.receivedSize / fileData.fileSize) * 100;
@@ -378,17 +377,13 @@ async function handleFileComplete(data) {
     if (!fileData) return;
 
     try {
-        // Verify we have all chunks
-        const expectedChunks = fileData.totalChunks;
-        const receivedChunks = fileData.chunks.filter(chunk => chunk).length;
-
-        if (receivedChunks !== expectedChunks) {
-            throw new Error(`Incomplete file transfer. Expected ${expectedChunks} chunks but got ${receivedChunks}`);
-        }
-
         // Combine chunks into blob
-        const chunks = fileData.chunks;
-        const blob = new Blob(chunks, { type: fileData.fileType });
+        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+        
+        // Verify file size
+        if (blob.size !== fileData.fileSize) {
+            throw new Error('Received file size does not match expected size');
+        }
 
         // Create file info object
         const fileInfo = {
@@ -405,74 +400,15 @@ async function handleFileComplete(data) {
             addFileToHistory(fileInfo, 'received');
         }
 
-        // Forward the file to other peers if we're not the original sender
-        if (data.originalSender !== peer.id) {
-            for (const [peerId, conn] of connections) {
-                // Don't send back to the original sender
-                if (peerId !== data.originalSender && conn && conn.open) {
-                    await forwardFile(data.fileId, fileData, conn);
-                }
-            }
-        }
-
         showNotification(`Received ${fileData.fileName}`, 'success');
-        updateTransferInfo('');
     } catch (error) {
         console.error('Error handling file completion:', error);
         showNotification('Error processing received file: ' + error.message, 'error');
     } finally {
         delete fileChunks[data.fileId];
-    }
-}
-
-// Forward received file to other peers
-async function forwardFile(fileId, fileData, conn) {
-    try {
-        // Send file header
-        conn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: fileData.fileName,
-            fileType: fileData.fileType,
-            fileSize: fileData.fileSize,
-            originalSender: fileData.originalSender
-        });
-
-        // Add small delay to ensure header is processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Send chunks in order with proper offset
-        for (let i = 0; i < fileData.chunks.length; i++) {
-            if (fileData.chunks[i]) {
-                conn.send({
-                    type: 'file-chunk',
-                    fileId: fileId,
-                    data: fileData.chunks[i],
-                    offset: i * CHUNK_SIZE,
-                    originalSender: fileData.originalSender
-                });
-                // Add small delay between chunks to prevent overwhelming the connection
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-        }
-
-        // Add small delay before sending completion
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Send completion
-        conn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: fileData.fileName,
-            fileType: fileData.fileType,
-            fileSize: fileData.fileSize,
-            originalSender: fileData.originalSender
-        });
-
-        console.log(`Forwarded file ${fileData.fileName} to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error forwarding file to peer ${conn.peer}:`, error);
-        showNotification(`Failed to forward file to peer ${conn.peer}`, 'error');
+        elements.transferProgress.classList.add('hidden');
+        updateProgress(0);
+        updateTransferInfo('');
     }
 }
 
@@ -502,28 +438,45 @@ async function sendFile(file) {
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
         
+        // Create file blob once for the sender
+        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+        
+        // Add to sender's history first
+        const fileInfo = {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            id: fileId,
+            blob: fileBlob,
+            sharedBy: peer.id
+        };
+        addFileToHistory(fileInfo, 'sent');
+
         // Send to all connected peers
+        const sendPromises = [];
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 console.log('Sending file to peer:', peerId);
-                await sendFileToPeer(file, conn, fileId);
+                sendPromises.push(sendFileToPeer(file, conn, fileId, fileBlob));
             }
         }
 
+        await Promise.all(sendPromises);
         showNotification(`File sent successfully to ${connections.size} peer(s)`, 'success');
     } catch (error) {
         console.error('File send error:', error);
-        showNotification('Failed to send file', 'error');
+        showNotification('Failed to send file: ' + error.message, 'error');
     } finally {
         transferInProgress = false;
         elements.transferProgress.classList.add('hidden');
+        updateProgress(0);
     }
 }
 
 // Send file to a specific peer
-async function sendFileToPeer(file, conn, fileId) {
+async function sendFileToPeer(file, conn, fileId, fileBlob) {
     try {
-        // Send file header to peer
+        // Send file header
         conn.send({
             type: 'file-header',
             fileId: fileId,
@@ -533,14 +486,12 @@ async function sendFileToPeer(file, conn, fileId) {
             originalSender: peer.id
         });
 
-        // Add small delay to ensure header is processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-
+        // Convert blob to array buffer once
+        const buffer = await fileBlob.arrayBuffer();
         let offset = 0;
+        
         while (offset < file.size) {
-            const chunk = await readFileChunk(file, offset, offset + CHUNK_SIZE);
-            
-            // Send chunk with file ID
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
             conn.send({
                 type: 'file-chunk',
                 fileId: fileId,
@@ -552,13 +503,7 @@ async function sendFileToPeer(file, conn, fileId) {
             offset += chunk.byteLength;
             const progress = Math.min((offset / file.size) * 100, 100);
             updateProgress(progress);
-
-            // Add small delay between chunks
-            await new Promise(resolve => setTimeout(resolve, 10));
         }
-
-        // Add small delay before sending completion
-        await new Promise(resolve => setTimeout(resolve, 100));
 
         // Send completion message
         conn.send({
@@ -570,30 +515,11 @@ async function sendFileToPeer(file, conn, fileId) {
             originalSender: peer.id
         });
 
-        // Store the file blob for the sender
-        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
-        const fileInfo = {
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            id: fileId,
-            blob: fileBlob,
-            sharedBy: peer.id
-        };
-        addFileToHistory(fileInfo, 'sent');
+        console.log(`File sent successfully to peer ${conn.peer}`);
     } catch (error) {
-        throw new Error(`Failed to send file to peer ${conn.peer}: ${error.message}`);
+        console.error(`Error sending file to peer ${conn.peer}:`, error);
+        throw new Error(`Failed to send to peer ${conn.peer}`);
     }
-}
-
-// Helper function to read file chunks
-function readFileChunk(file, start, end) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsArrayBuffer(file.slice(start, end));
-    });
 }
 
 // Update progress bar and text

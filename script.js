@@ -899,9 +899,9 @@ function updateConnectionStatus(status, message) {
     
     // Update title to show number of connections
     if (connections && connections.size > 0) {
-        document.title = `(${connections.size}) P2P File Share`;
+        document.title = `(${connections.size}) One-Host`;
     } else {
-        document.title = 'P2P File Share';
+        document.title = 'One-Host';
     }
 }
 

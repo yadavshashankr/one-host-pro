@@ -946,65 +946,89 @@ function updateConnectionStatus(status, message) {
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
+    console.log('Updating files list:', { type, fileInfo });
+    
+    // Check if file already exists in this list
+    const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
+    if (existingFile) {
+        console.log('File already exists in list, updating...');
+        existingFile.remove();
+    }
+
     const li = document.createElement('li');
+    li.className = 'file-item';
+    li.setAttribute('data-file-id', fileInfo.id);
     
-    // Format file size
-    const formattedSize = formatFileSize(fileInfo.size);
+    const icon = document.createElement('span');
+    icon.className = 'material-icons';
+    icon.textContent = getFileIcon(fileInfo.type);
     
-    // Create file icon based on type
-    const fileIcon = getFileIcon(fileInfo.type);
+    const info = document.createElement('div');
+    info.className = 'file-info';
     
-    // Create sender/receiver text
-    const peerText = type === 'sent' ? 'Sent to peers' : `Received from ${fileInfo.sharedBy}`;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-name';
+    nameSpan.textContent = fileInfo.name;
     
-    li.innerHTML = `
-        <span class="material-icons file-icon">${fileIcon}</span>
-        <div class="file-info">
-            <div class="file-name">${fileInfo.name}</div>
-            <div class="file-meta">
-                <span class="file-size">${formattedSize}</span>
-                <span class="file-peer">${peerText}</span>
-            </div>
-        </div>
-        <button class="download-button" title="Download file">
-            <span class="material-icons">download</span>
-        </button>
-    `;
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'file-size';
+    sizeSpan.textContent = formatFileSize(fileInfo.size);
+
+    const sharedBySpan = document.createElement('span');
+    sharedBySpan.className = 'shared-by';
+    sharedBySpan.textContent = `Shared by: ${fileInfo.sharedBy || 'Unknown'}`;
     
-    li.dataset.fileId = fileInfo.id;
+    info.appendChild(nameSpan);
+    info.appendChild(sizeSpan);
+    info.appendChild(sharedBySpan);
     
-    // Add download handler
-    const downloadButton = li.querySelector('.download-button');
-    downloadButton.addEventListener('click', () => {
-        downloadFile(fileInfo);
-    });
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'icon-button';
+    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+    downloadBtn.onclick = () => {
+        if (fileInfo.blob) {
+            console.log('Downloading file:', fileInfo);
+            const url = URL.createObjectURL(fileInfo.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileInfo.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        } else {
+            console.error('No blob available for file:', fileInfo);
+            showNotification('File data not available for download', 'error');
+        }
+    };
     
-    // Add to list
-    listElement.insertBefore(li, listElement.firstChild);
+    li.appendChild(icon);
+    li.appendChild(info);
+    li.appendChild(downloadBtn);
+    
+    // Add to the beginning of the list for newest first
+    if (listElement.firstChild) {
+        listElement.insertBefore(li, listElement.firstChild);
+    } else {
+        listElement.appendChild(li);
+    }
+    
+    console.log('File list updated successfully');
 }
 
-// Format file size
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-// Get appropriate icon based on file type
+// Add function to get appropriate file icon
 function getFileIcon(mimeType) {
     if (!mimeType) return 'insert_drive_file';
     
     if (mimeType.startsWith('image/')) return 'image';
     if (mimeType.startsWith('video/')) return 'movie';
     if (mimeType.startsWith('audio/')) return 'audiotrack';
-    if (mimeType.startsWith('text/')) return 'description';
     if (mimeType.includes('pdf')) return 'picture_as_pdf';
-    if (mimeType.includes('word') || mimeType.includes('document')) return 'article';
-    if (mimeType.includes('sheet') || mimeType.includes('excel')) return 'table_chart';
+    if (mimeType.includes('word') || mimeType.includes('document')) return 'description';
+    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_chart';
     if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'slideshow';
-    if (mimeType.includes('compressed') || mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
+    if (mimeType.includes('text/')) return 'text_snippet';
+    if (mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
     
     return 'insert_drive_file';
 }

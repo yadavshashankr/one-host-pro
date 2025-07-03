@@ -276,108 +276,57 @@ input[type="file"] {
 
 .files-list {
     list-style: none;
-    margin: 0;
-    padding: 0;
 }
 
 .files-list li {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px;
+    gap: 10px;
+    padding: 10px;
     background: var(--background-color);
     border-radius: 4px;
     margin-bottom: 8px;
-    transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.files-list li:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.file-icon {
+.files-list .material-icons {
     color: var(--primary-color);
-    font-size: 24px;
 }
 
 .file-info {
     flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
 }
 
 .file-name {
     font-weight: 500;
-    color: var(--text-color);
-    word-break: break-all;
-    margin: 0;
-}
-
-.file-meta {
-    display: flex;
-    gap: 16px;
-    font-size: 0.85rem;
-    color: #666;
 }
 
 .file-size {
-    white-space: nowrap;
-}
-
-.file-peer {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 0.9rem;
+    color: #666;
 }
 
 .download-button {
     background: none;
     border: none;
     cursor: pointer;
-    padding: 8px;
+    padding: 4px;
     border-radius: 4px;
-    color: var(--primary-color);
-    transition: background-color 0.2s;
     display: flex;
     align-items: center;
-    justify-content: center;
 }
 
 .download-button:hover {
-    background-color: rgba(33, 150, 243, 0.1);
+    background-color: var(--border-color);
 }
 
-.download-button .material-icons {
-    font-size: 20px;
+.download-button.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: var(--border-color);
 }
 
-/* Files sections */
-.files-section {
-    background: var(--card-background);
-    border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.files-section h3 {
-    margin: 0 0 16px 0;
-    color: var(--text-color);
-    font-size: 1.1rem;
-    font-weight: 500;
-}
-
-/* Empty state */
-.files-list:empty::after {
-    content: 'No files yet';
-    display: block;
-    text-align: center;
-    padding: 24px;
-    color: #666;
-    font-style: italic;
+.download-button.disabled:hover {
+    background-color: var(--border-color);
 }
 
 /* Recent peers dropdown */

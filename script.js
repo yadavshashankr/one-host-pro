@@ -297,12 +297,10 @@ function setupConnectionHandlers(conn) {
             if (data.type === 'connection-notification') {
                 updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
             } else if (data.type === 'file-history-update') {
-                // Handle file history update
+                // Only process history updates for files we don't have
                 const fileId = data.fileInfo.id;
-                const type = data.fileInfo.sharedBy === peer.id ? 'sent' : 'received';
-                
-                // Only add if not already in history
-                if (!fileHistory[type].has(fileId)) {
+                if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
+                    const type = data.fileInfo.sharedBy === peer.id ? 'sent' : 'received';
                     fileHistory[type].add(fileId);
                     const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
                     updateFilesList(listElement, data.fileInfo, type);
@@ -380,27 +378,26 @@ async function handleFileComplete(data) {
         // Combine chunks into blob
         const chunks = fileData.chunks.filter(chunk => chunk);
         const blob = new Blob(chunks, { type: fileData.fileType });
-        
-        // Store the blob in the file data instead of creating a URL
-        fileData.blob = blob;
 
-        // Add to received files history without URL
+        // Create file info object
         const fileInfo = {
             name: fileData.fileName,
             type: fileData.fileType,
             size: fileData.fileSize,
             id: data.fileId,
-            blob: blob, // Store blob reference
-            sharedBy: fileData.originalSender // Add sender information
+            blob: blob,
+            sharedBy: fileData.originalSender
         };
 
-        // Add to history and update UI
-        addFileToHistory(fileInfo, 'received');
+        // Add to history only if we haven't processed this file before
+        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+            addFileToHistory(fileInfo, 'received');
+        }
 
-        // Forward the file to other peers if we're not the original recipient
+        // Forward the file to other peers if we're not the original sender
         if (data.originalSender !== peer.id) {
             for (const [peerId, conn] of connections) {
-                // Don't send back to the original sender or the peer we received from
+                // Don't send back to the original sender
                 if (peerId !== data.originalSender && conn && conn.open) {
                     forwardFile(data.fileId, fileData, conn);
                 }
@@ -409,10 +406,11 @@ async function handleFileComplete(data) {
 
         showNotification(`Received ${fileData.fileName}`, 'success');
         updateTransferInfo('');
-        delete fileChunks[data.fileId];
     } catch (error) {
         console.error('Error handling file completion:', error);
         showNotification('Error processing received file', 'error');
+    } finally {
+        delete fileChunks[data.fileId];
     }
 }
 
@@ -429,7 +427,7 @@ async function forwardFile(fileId, fileData, conn) {
             originalSender: fileData.originalSender
         });
 
-        // Send chunks
+        // Send chunks in order
         for (let i = 0; i < fileData.chunks.length; i++) {
             if (fileData.chunks[i]) {
                 conn.send({
@@ -837,18 +835,20 @@ function updateConnectionStatus(status, message) {
 function addFileToHistory(fileInfo, type) {
     const fileId = fileInfo.id || generateFileId(fileInfo);
     
-    // Determine correct history type based on who shared the file
-    let actualType = type;
-    if (fileInfo.sharedBy === peer.id) {
-        actualType = 'sent';
-    } else if (type !== 'sent') {
-        actualType = 'received';
-    }
+    // Determine the correct type based on who shared the file
+    const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
     
-    // Store in appropriate history set
+    // Remove from both lists first to prevent duplicates
+    fileHistory.sent.delete(fileId);
+    fileHistory.received.delete(fileId);
+    
+    // Add to the correct history set
     fileHistory[actualType].add(fileId);
     
-    // Update UI
+    // Remove any existing entries from UI
+    removeFileFromLists(fileId);
+    
+    // Update UI with the correct list
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
     
@@ -879,19 +879,9 @@ function broadcastFileHistory(fileInfo, type) {
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
-    // Check if file already exists in any list to prevent duplicates
-    const sentList = document.getElementById('sent-files-list');
-    const receivedList = document.getElementById('received-files-list');
-    
-    const existingInSent = Array.from(sentList.children).find(li => 
-        li.getAttribute('data-file-id') === fileInfo.id
-    );
-    const existingInReceived = Array.from(receivedList.children).find(li => 
-        li.getAttribute('data-file-id') === fileInfo.id
-    );
-    
-    // If file exists in either list, don't add it again
-    if (existingInSent || existingInReceived) return;
+    // Check if file already exists in this list
+    const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
+    if (existingFile) return;
 
     const li = document.createElement('li');
     li.className = 'file-item';

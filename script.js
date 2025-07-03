@@ -846,75 +846,180 @@ elements.dropZone.addEventListener('click', () => {
     }
 });
 
-// Initialize the application
-function init() {
-    if (!checkBrowserSupport()) {
-        return;
-    }
+// Initialize PeerJS connection
+async function initPeerJS() {
+    try {
+        // Initialize Peer object with GitHub Pages configuration
+        peer = new Peer(null, {
+            host: 'yadavshashankr.github.io',
+            path: '/local-host',
+            secure: true,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            },
+            debug: 2
+        });
 
-    // Clear any existing value in the remote peer ID field
-    elements.remotePeerId.value = '';
-    
-    initPeerJS();
-    initIndexedDB();
-    loadRecentPeers();
-    checkUrlForPeerId(); // Check URL for peer ID on load
-    
-    // Show share button if Web Share API is supported
-    if (navigator.share) {
-        elements.shareId = document.getElementById('share-id');
-        elements.shareId.classList.remove('hidden');
+        // Handle peer open event
+        peer.on('open', (id) => {
+            peerId = id;
+            console.log('My peer ID is:', id);
+            updatePeerId();
+            showNotification('Connected to signaling server', 'success');
+            if (!hostId) {
+                hostId = id;
+            }
+        });
+
+        // Handle incoming connections
+        peer.on('connection', (conn) => {
+            handleConnection(conn);
+        });
+
+        // Handle errors
+        peer.on('error', (error) => {
+            console.error('PeerJS error:', error);
+            handlePeerError(error);
+        });
+
+        // Handle disconnection
+        peer.on('disconnected', () => {
+            console.log('Disconnected from signaling server');
+            showNotification('Disconnected from signaling server', 'warning');
+            
+            // Try to reconnect
+            setTimeout(() => {
+                if (peer && !peer.destroyed) {
+                    peer.reconnect();
+                }
+            }, 5000);
+        });
+
+        // Handle close
+        peer.on('close', () => {
+            console.log('Connection destroyed');
+            showNotification('Connection closed', 'error');
+        });
+
+    } catch (error) {
+        console.error('Failed to initialize PeerJS:', error);
+        showNotification('Failed to initialize connection', 'error');
     }
 }
 
-// Add CSS classes for notification styling
-const style = document.createElement('style');
-style.textContent = `
-    .notification {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        animation: slideIn 0.3s ease-out;
-        transition: opacity 0.3s ease-out;
+// Initialize the application
+async function init() {
+    try {
+        // Initialize IndexedDB
+        await initIndexedDB();
+        
+        // Initialize UI elements
+        initializeElements();
+        
+        // Initialize event listeners
+        initializeEventListeners();
+        
+        // Initialize PeerJS connection
+        await initPeerJS();
+        
+        console.log('Application initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize application:', error);
+        showNotification('Failed to initialize application', 'error');
     }
-    
-    .notification.fade-out {
-        opacity: 0;
-    }
-    
-    .notification-icon {
-        font-size: 1.2em;
-    }
-    
-    .notification.info {
-        background-color: #e0f2fe;
-        color: #0369a1;
-    }
-    
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-`;
-document.head.appendChild(style);
+}
 
-// Add function to update connection status
-function updateConnectionStatus(status, message) {
-    elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message;
-    
-    // Update title to show number of connections
-    if (peerCount > 0) {
-        document.title = `(${peerCount}) P2P File Share`;
-    } else {
-        document.title = 'P2P File Share';
+// Initialize UI elements
+function initializeElements() {
+    elements = {
+        connectForm: document.getElementById('connectForm'),
+        peerIdInput: document.getElementById('peerIdInput'),
+        connectButton: document.getElementById('connectButton'),
+        fileInput: document.getElementById('fileInput'),
+        sendButton: document.getElementById('sendButton'),
+        status: document.getElementById('status'),
+        peerId: document.getElementById('peerId'),
+        sentFilesList: document.getElementById('sentFilesList'),
+        receivedFilesList: document.getElementById('receivedFilesList'),
+        progressBar: document.getElementById('progressBar'),
+        progressContainer: document.getElementById('progressContainer'),
+        progressText: document.getElementById('progressText'),
+        connectedPeers: document.getElementById('connectedPeers'),
+        notifications: document.getElementById('notifications')
+    };
+}
+
+// Initialize event listeners
+function initializeEventListeners() {
+    // Connect form submission
+    elements.connectForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const targetPeerId = elements.peerIdInput.value.trim();
+        if (targetPeerId) {
+            connectToPeer(targetPeerId);
+        }
+    });
+
+    // File input change
+    elements.fileInput.addEventListener('change', handleFileSelect);
+
+    // Send button click
+    elements.sendButton.addEventListener('click', () => {
+        const files = elements.fileInput.files;
+        if (files.length > 0) {
+            sendFileToPeers(files[0]);
+        }
+    });
+}
+
+// Update peer ID display
+function updatePeerId() {
+    if (elements.peerId) {
+        elements.peerId.textContent = peerId || 'Not connected';
     }
+}
+
+// Handle peer errors
+function handlePeerError(error) {
+    let message = 'Connection error';
+    
+    switch (error.type) {
+        case 'browser-incompatible':
+            message = 'Your browser does not support WebRTC';
+            break;
+        case 'disconnected':
+            message = 'Disconnected from signaling server';
+            break;
+        case 'invalid-id':
+            message = 'Invalid peer ID';
+            break;
+        case 'invalid-key':
+            message = 'Invalid API key';
+            break;
+        case 'network':
+            message = 'Network error';
+            break;
+        case 'peer-unavailable':
+            message = 'Peer is not available';
+            break;
+        case 'ssl-unavailable':
+            message = 'SSL unavailable';
+            break;
+        case 'server-error':
+            message = 'Signaling server error';
+            break;
+        case 'socket-error':
+            message = 'Socket connection error';
+            break;
+        case 'socket-closed':
+            message = 'Socket connection closed';
+            break;
+    }
+    
+    showNotification(message, 'error');
 }
 
 // Update files list with download handling
@@ -1246,47 +1351,6 @@ function handleTransferFailure(peerId, error) {
     transferState.activeTransfers.delete(peerId);
     transferState.pausedTransfers.delete(peerId);
     showNotification(`Transfer failed: ${error.message}`, 'error');
-}
-
-// Initialize PeerJS connection
-function initializePeer() {
-    const peerConfig = {
-        debug: 3,
-        host: 'yadavshashankr.github.io',
-        path: '/local-host',
-        secure: true,
-        config: {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
-        }
-    };
-
-    peer = new Peer(generatePeerId(), peerConfig);
-
-    peer.on('open', (id) => {
-        elements.peerId.value = id;
-        showNotification('Your peer ID is: ' + id, 'info');
-        if (!hostId) {
-            hostId = id;
-        }
-    });
-
-    peer.on('connection', (conn) => {
-        console.log('Incoming connection from:', conn.peer);
-        handleConnection(conn);
-    });
-
-    peer.on('error', (error) => {
-        console.error('PeerJS Error:', error);
-        showNotification('Connection error: ' + error.message, 'error');
-    });
-
-    peer.on('disconnected', () => {
-        console.log('Peer disconnected - attempting to reconnect');
-        peer.reconnect();
-    });
 }
 
 // Connect to a peer

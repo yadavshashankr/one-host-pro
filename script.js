@@ -376,18 +376,21 @@ async function handleFileComplete(data) {
     if (!fileData) return;
 
     try {
-        // Combine chunks
+        // Combine chunks into blob
         const chunks = fileData.chunks.filter(chunk => chunk);
         const blob = new Blob(chunks, { type: fileData.fileType });
-        const url = URL.createObjectURL(blob);
+        
+        // Store the blob in the file data instead of creating a URL
+        fileData.blob = blob;
 
-        // Add to received files history
+        // Add to received files history without URL
         addFileToHistory({
             name: fileData.fileName,
             type: fileData.fileType,
             size: fileData.fileSize,
-            id: data.fileId
-        }, 'received', url);
+            id: data.fileId,
+            blob: blob // Store blob reference
+        }, 'received');
 
         // Forward the file to other peers if we're not the original recipient
         if (data.originalSender !== peer.id) {
@@ -815,93 +818,85 @@ function updateConnectionStatus(status, message) {
 }
 
 // Update file history management
-function addFileToHistory(file, type, url = null) {
-    const fileId = generateFileId(file);
-    const fileInfo = {
-        id: fileId,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        timestamp: new Date().toISOString(),
-        url: url
-    };
-
-    // Check if file already exists in history
-    if (!fileHistory[type].has(fileId)) {
-        fileHistory[type].add(fileId);
-        updateFilesList(type === 'sent' ? elements.sentFilesList : elements.receivedFilesList, fileInfo, type);
-    }
-
-    // Send file history update to peer
-    if (connections.size > 0) {
-        for (const [peerId, conn] of connections) {
-            if (conn && conn.open) {
-                conn.send({
-                    type: 'file-history-update',
-                    historyType: type,
-                    fileInfo: fileInfo
-                });
-            }
+function addFileToHistory(fileInfo, type) {
+    const fileId = fileInfo.id || generateFileId(fileInfo);
+    
+    // Store in appropriate history set
+    fileHistory[type].add(fileId);
+    
+    // Update UI
+    const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+    updateFilesList(listElement, fileInfo, type);
+    
+    // Notify other peers about the file history update
+    for (const conn of connections.values()) {
+        if (conn.open) {
+            conn.send({
+                type: 'file-history-update',
+                fileInfo: {
+                    id: fileId,
+                    name: fileInfo.name,
+                    type: fileInfo.type,
+                    size: fileInfo.size,
+                    blob: fileInfo.blob // Include blob for received files
+                },
+                historyType: type
+            });
         }
     }
 }
 
 // Update files list display
 function updateFilesList(listElement, fileInfo, type) {
-    // Check if file already exists in the list
-    const existingFile = Array.from(listElement.children).find(li => li.dataset.fileId === fileInfo.id);
-    if (existingFile) {
-        return; // Skip if file already exists
-    }
-
     const li = document.createElement('li');
-    li.dataset.fileId = fileInfo.id;
-
+    li.className = 'file-item';
+    
     const icon = document.createElement('span');
     icon.className = 'material-icons';
     icon.textContent = getFileIcon(fileInfo.type);
-
-    const fileInfoDiv = document.createElement('div');
-    fileInfoDiv.className = 'file-info';
-
-    const fileName = document.createElement('div');
-    fileName.className = 'file-name';
-    fileName.textContent = fileInfo.name;
-
-    const fileSize = document.createElement('div');
-    fileSize.className = 'file-size';
-    fileSize.textContent = formatFileSize(fileInfo.size);
-
-    fileInfoDiv.appendChild(fileName);
-    fileInfoDiv.appendChild(fileSize);
-
-    li.appendChild(icon);
-    li.appendChild(fileInfoDiv);
-
-    // Add download button for both sent and received files
-    const downloadButton = document.createElement('button');
-    downloadButton.className = 'download-button';
-    downloadButton.innerHTML = '<span class="material-icons">download</span>';
-    downloadButton.title = 'Download file';
-
-    if (fileInfo.url) {
-        downloadButton.addEventListener('click', () => {
+    
+    const info = document.createElement('div');
+    info.className = 'file-info';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-name';
+    nameSpan.textContent = fileInfo.name;
+    
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'file-size';
+    sizeSpan.textContent = formatFileSize(fileInfo.size);
+    
+    info.appendChild(nameSpan);
+    info.appendChild(sizeSpan);
+    
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'icon-button';
+    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+    downloadBtn.onclick = () => {
+        if (fileInfo.blob) {
+            // Create URL only when downloading
+            const url = URL.createObjectURL(fileInfo.blob);
             const a = document.createElement('a');
-            a.href = fileInfo.url;
+            a.href = url;
             a.download = fileInfo.name;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-        });
+            // Revoke URL immediately after download starts
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        }
+    };
+    
+    li.appendChild(icon);
+    li.appendChild(info);
+    li.appendChild(downloadBtn);
+    
+    // Add to the beginning of the list for newest first
+    if (listElement.firstChild) {
+        listElement.insertBefore(li, listElement.firstChild);
     } else {
-        downloadButton.classList.add('disabled');
-        downloadButton.title = 'File not available for download';
+        listElement.appendChild(li);
     }
-
-    li.appendChild(downloadButton);
-
-    // Insert at the beginning of the list
-    listElement.insertBefore(li, listElement.firstChild);
 }
 
 // Add function to get appropriate file icon

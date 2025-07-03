@@ -281,52 +281,83 @@ input[type="file"] {
 .files-list li {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
+    gap: 12px;
+    padding: 12px;
     background: var(--background-color);
-    border-radius: 4px;
+    border-radius: 8px;
     margin-bottom: 8px;
+    transition: background-color 0.2s;
+}
+
+.files-list li:hover {
+    background-color: #f0f0f0;
 }
 
 .files-list .material-icons {
     color: var(--primary-color);
+    font-size: 24px;
 }
 
 .file-info {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
 }
 
 .file-name {
     font-weight: 500;
+    font-size: 1rem;
+    color: var(--text-color);
+    word-break: break-all;
+    margin-bottom: 2px;
 }
 
 .file-size {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: #666;
+    margin-bottom: 2px;
+}
+
+.shared-by {
+    font-size: 0.85rem;
+    color: #666;
+    font-style: italic;
 }
 
 .download-button {
     background: none;
     border: none;
     cursor: pointer;
-    padding: 4px;
+    padding: 8px;
     border-radius: 4px;
-    display: flex;
-    align-items: center;
+    color: var(--primary-color);
+    transition: background-color 0.2s;
 }
 
 .download-button:hover {
-    background-color: var(--border-color);
+    background-color: rgba(33, 150, 243, 0.1);
 }
 
-.download-button.disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background-color: var(--border-color);
+.download-button .material-icons {
+    font-size: 20px;
 }
 
-.download-button.disabled:hover {
-    background-color: var(--border-color);
+/* Files sections */
+.files-section {
+    background: var(--card-background);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.files-section h3 {
+    margin: 0 0 16px 0;
+    color: var(--text-color);
+    font-size: 1.1rem;
+    font-weight: 500;
 }
 
 /* Recent peers dropdown */

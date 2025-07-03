@@ -737,46 +737,16 @@ function formatFileSize(bytes) {
     return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
-function showNotification(message, type = 'success') {
-    if (!elements.notifications) {
-        console.warn('Notifications container not found');
-        return;
-    }
-
+function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
-    notification.textContent = message;
+    notification.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
     
-    // Add different icons based on notification type
-    const icon = document.createElement('span');
-    icon.className = 'notification-icon';
-    switch (type) {
-        case 'success':
-            icon.textContent = '✓ ';
-            break;
-        case 'error':
-            icon.textContent = '✕ ';
-            break;
-        case 'info':
-            icon.textContent = 'ℹ ';
-            break;
-        default:
-            icon.textContent = '• ';
-    }
-    
-    notification.insertBefore(icon, notification.firstChild);
     elements.notifications.appendChild(notification);
     
     setTimeout(() => {
-        if (notification.parentNode === elements.notifications) {
-            notification.classList.add('fade-out');
-            setTimeout(() => {
-                if (notification.parentNode === elements.notifications) {
-                    elements.notifications.removeChild(notification);
-                }
-            }, 300);
-        }
-    }, 4700);
+        notification.remove();
+    }, 5000);
 }
 
 function resetConnection() {
@@ -934,7 +904,7 @@ document.head.appendChild(style);
 // Add function to update connection status
 function updateConnectionStatus(status, message) {
     elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message;
+    elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
     
     // Update title to show number of connections
     if (connections && connections.size > 0) {
@@ -976,7 +946,10 @@ function updateFilesList(listElement, fileInfo, type) {
 
     const sharedBySpan = document.createElement('span');
     sharedBySpan.className = 'shared-by';
-    sharedBySpan.textContent = `Shared by: ${fileInfo.sharedBy || 'Unknown'}`;
+    // Use sentence case for shared by text
+    sharedBySpan.textContent = type === 'sent' ? 
+        'Sent to connected peers' : 
+        `Received from peer ${fileInfo.sharedBy || 'Unknown'}`;
     
     info.appendChild(nameSpan);
     info.appendChild(sizeSpan);
@@ -984,6 +957,7 @@ function updateFilesList(listElement, fileInfo, type) {
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';
+    downloadBtn.title = 'Download file';  // Add tooltip in sentence case
     downloadBtn.innerHTML = '<span class="material-icons">download</span>';
     downloadBtn.onclick = () => {
         if (fileInfo.blob) {
@@ -998,7 +972,7 @@ function updateFilesList(listElement, fileInfo, type) {
             setTimeout(() => URL.revokeObjectURL(url), 100);
         } else {
             console.error('No blob available for file:', fileInfo);
-            showNotification('File data not available for download', 'error');
+            showNotification('File is not available for download', 'error');  // Updated error message to sentence case
         }
     };
     

@@ -22,88 +22,94 @@
     </header>
 
     <main>
-      <section id="connection-section">
-        <div class="peer-info">
-          <h2>Your Peer ID</h2>
-          <div class="peer-id-container">
-            <span id="peer-id">Generating...</span>
-            <div class="peer-actions">
-              <button id="copy-id" class="icon-button" title="Copy ID">
-                <span class="material-icons">content_copy</span>
-              </button>
-              <button id="share-id" class="icon-button" title="Share ID">
-                <span class="material-icons">share</span>
-              </button>
-            </div>
-          </div>
-          <div id="qrcode-container">
-            <div id="qrcode"></div>
-          </div>
-        </div>
-
-        <div class="connect-peer">
-          <h2>Connect to Peer</h2>
-          <div class="input-group">
-            <div class="peer-input-container">
-              <input type="text" id="remote-peer-id" placeholder="Enter peer ID">
-              <div id="recent-peers" class="recent-peers hidden">
-                <div class="recent-peers-header">
-                  Recent Connections
-                  <button id="clear-peers" class="clear-peers">
-                    <span class="material-icons">clear_all</span>
-                  </button>
-                </div>
-                <ul id="recent-peers-list"></ul>
+      <div class="main-grid">
+        <section id="connection-section" class="panel">
+          <div class="peer-info">
+            <h2>Your Peer ID</h2>
+            <div class="peer-id-container">
+              <span id="peer-id" class="peer-id">Generating...</span>
+              <div class="peer-actions">
+                <button id="copy-id" class="icon-button" title="Copy ID">
+                  <span class="material-icons">content_copy</span>
+                </button>
+                <button id="share-id" class="icon-button" title="Share ID">
+                  <span class="material-icons">share</span>
+                </button>
               </div>
             </div>
-            <button id="connect-button" class="button primary">
-              <span class="material-icons">link</span>
-              <span>Connect</span>
-            </button>
-          </div>
-        </div>
-
-        <div id="connection-status" class="status">
-          <div class="status-indicator">
-            <div id="status-dot" class="status-dot"></div>
-            <span id="status-text">Initializing...</span>
-          </div>
-        </div>
-      </section>
-
-      <section id="file-transfer-section" class="hidden">
-        <div class="file-input-container">
-          <div class="drop-zone" id="drop-zone">
-            <input type="file" id="file-input" multiple>
-            <div class="drop-zone-text">
-              <span class="material-icons">upload_file</span>
-              <span>Drop files here or click to select</span>
+            <div id="qrcode-container">
+              <div id="qrcode"></div>
             </div>
           </div>
-        </div>
 
-        <div id="transfer-progress" class="hidden">
-          <h3>Transfer Progress</h3>
-          <div class="progress-container">
-            <div class="progress-bar">
-              <div id="progress" class="progress"></div>
+          <div class="connect-peer">
+            <h2>Connect to Peer</h2>
+            <div class="input-group">
+              <div class="peer-input-container">
+                <input type="text" id="remote-peer-id" placeholder="Enter peer ID">
+                <div id="recent-peers" class="recent-peers hidden">
+                  <div class="recent-peers-header">
+                    <span>Recent Connections</span>
+                    <button id="clear-peers" class="clear-peers">
+                      <span class="material-icons">clear_all</span>
+                    </button>
+                  </div>
+                  <ul id="recent-peers-list"></ul>
+                </div>
+              </div>
+              <button id="connect-button" class="button primary">
+                <span class="material-icons">link</span>
+                <span>Connect</span>
+              </button>
             </div>
-            <span id="progress-text">0%</span>
           </div>
-          <div id="transfer-info"></div>
-        </div>
 
-        <div id="files-history" class="files-history">
-          <div class="files-section">
-            <h3>Sent Files</h3>
-            <ul id="sent-files-list" class="files-list"></ul>
+          <div id="connection-status" class="status">
+            <div class="status-indicator">
+              <div id="status-dot" class="status-dot"></div>
+              <span id="status-text">Initializing...</span>
+            </div>
           </div>
-          <div class="files-section">
-            <h3>Received Files</h3>
-            <ul id="received-files-list" class="files-list"></ul>
+        </section>
+
+        <section id="file-transfer-section" class="panel hidden">
+          <div class="file-input-container">
+            <div class="drop-zone" id="drop-zone">
+              <input type="file" id="file-input" multiple>
+              <div class="drop-zone-text">
+                <span class="material-icons">upload_file</span>
+                <span>Drop files here or click to select</span>
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
+
+          <div id="transfer-progress" class="hidden">
+            <h3>Transfer Progress</h3>
+            <div class="progress-container">
+              <div class="progress-bar">
+                <div id="progress" class="progress"></div>
+              </div>
+              <span id="progress-text">0%</span>
+            </div>
+            <div id="transfer-info"></div>
+          </div>
+
+          <div id="files-history" class="files-history">
+            <div class="files-section">
+              <h3>Sent Files</h3>
+              <div class="files-list-container">
+                <ul id="sent-files-list" class="files-list"></ul>
+              </div>
+            </div>
+            <div class="files-section">
+              <h3>Received Files</h3>
+              <div class="files-list-container">
+                <ul id="received-files-list" class="files-list"></ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
 
     <div id="notifications" class="notifications"></div>

@@ -182,12 +182,6 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
-// File synchronization state
-const fileSyncState = {
-    pendingFiles: new Map(), // Files waiting to be synced
-    syncInProgress: false
-};
-
 // Initialize PeerJS
 function initPeerJS() {
     try {
@@ -263,43 +257,36 @@ function setupConnectionHandlers(conn) {
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
         
-        // Initialize file sync
-        initializeFileSync(conn);
+        // Send a connection notification to the other peer
+        conn.send({
+            type: 'connection-notification',
+            peerId: peer.id
+        });
     });
 
     conn.on('data', async (data) => {
         try {
-            switch (data.type) {
-                case 'request-file-list':
-                    await handleFileListRequest(conn);
-                    break;
-                case 'file-list':
-                    await handleFileList(data, conn);
-                    break;
-                case 'request-file':
-                    await handleFileRequest(data, conn);
-                    break;
-                case 'sync-file-header':
-                    handleSyncFileHeader(data);
-                    break;
-                case 'sync-file-chunk':
-                    await handleSyncFileChunk(data);
-                    break;
-                case 'sync-file-complete':
-                    await handleSyncFileComplete(data);
-                    break;
-                case 'file-header':
-                    await handleFileHeader(data);
-                    break;
-                case 'file-chunk':
-                    await handleFileChunk(data);
-                    break;
-                case 'file-complete':
-                    await handleFileComplete(data);
-                    break;
+            if (data.type === 'connection-notification') {
+                updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+            } else if (data.type === 'file-history-update') {
+                const fileId = data.fileInfo.id;
+                const type = data.historyType === 'sent' ? 'received' : 'sent';
+                
+                // Only update if file doesn't exist in history
+                if (!fileHistory[type].has(fileId)) {
+                    fileHistory[type].add(fileId);
+                    const listElement = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+                    updateFilesList(listElement, data.fileInfo, type);
+                }
+            } else if (data.type === 'file-header') {
+                await handleFileHeader(data);
+            } else if (data.type === 'file-chunk') {
+                await handleFileChunk(data);
+            } else if (data.type === 'file-complete') {
+                await handleFileComplete(data);
             }
         } catch (error) {
-            console.error('Error handling data:', error);
+            console.error('Data handling error:', error);
             showNotification('Error processing received data', 'error');
         }
     });
@@ -307,10 +294,8 @@ function setupConnectionHandlers(conn) {
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
-        updateConnectionStatus(
-            connections.size > 0 ? 'connected' : '', 
-            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected'
-        );
+        updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected');
         if (connections.size === 0) {
             showNotification('All peers disconnected', 'error');
         } else {
@@ -886,211 +871,5 @@ elements.clearPeers.addEventListener('click', () => {
     updateRecentPeersList();
     elements.recentPeers.classList.add('hidden');
 });
-
-// Initialize file sync on connection
-function initializeFileSync(conn) {
-    // Request file list from peer
-    conn.send({
-        type: 'request-file-list'
-    });
-}
-
-// Handle file list request
-async function handleFileListRequest(conn) {
-    try {
-        const transaction = db.transaction([STORE_NAME], 'readonly');
-        const store = transaction.objectStore(STORE_NAME);
-        const files = await store.getAll();
-        
-        conn.send({
-            type: 'file-list',
-            files: files.map(file => ({
-                id: file.id,
-                name: file.name,
-                size: file.size,
-                type: file.type,
-                timestamp: file.timestamp
-            }))
-        });
-    } catch (error) {
-        console.error('Error sending file list:', error);
-    }
-}
-
-// Handle received file list
-async function handleFileList(data, conn) {
-    try {
-        const transaction = db.transaction([STORE_NAME], 'readonly');
-        const store = transaction.objectStore(STORE_NAME);
-        const localFiles = await store.getAll();
-        const localFileIds = new Set(localFiles.map(f => f.id));
-
-        // Find files we don't have
-        for (const file of data.files) {
-            if (!localFileIds.has(file.id)) {
-                fileSyncState.pendingFiles.set(file.id, {
-                    ...file,
-                    peer: conn.peer
-                });
-            }
-        }
-
-        // Start sync if not already in progress
-        if (!fileSyncState.syncInProgress) {
-            syncNextFile();
-        }
-    } catch (error) {
-        console.error('Error processing file list:', error);
-    }
-}
-
-// Sync next pending file
-async function syncNextFile() {
-    if (fileSyncState.pendingFiles.size === 0) {
-        fileSyncState.syncInProgress = false;
-        return;
-    }
-
-    fileSyncState.syncInProgress = true;
-    const [fileId, fileInfo] = fileSyncState.pendingFiles.entries().next().value;
-    fileSyncState.pendingFiles.delete(fileId);
-
-    const conn = connections.get(fileInfo.peer);
-    if (conn && conn.open) {
-        try {
-            conn.send({
-                type: 'request-file',
-                fileId: fileId
-            });
-        } catch (error) {
-            console.error('Error requesting file:', error);
-            syncNextFile(); // Move to next file
-        }
-    } else {
-        syncNextFile(); // Move to next file if peer not available
-    }
-}
-
-// Handle file request
-async function handleFileRequest(data, conn) {
-    try {
-        const transaction = db.transaction([STORE_NAME], 'readonly');
-        const store = transaction.objectStore(STORE_NAME);
-        const fileData = await store.get(data.fileId);
-
-        if (fileData && fileData.blob) {
-            // Send file in chunks
-            const chunkSize = 16384; // 16KB chunks
-            const totalChunks = Math.ceil(fileData.blob.size / chunkSize);
-
-            // Send file header
-            conn.send({
-                type: 'sync-file-header',
-                fileId: fileData.id,
-                name: fileData.name,
-                type: fileData.type,
-                size: fileData.size,
-                totalChunks: totalChunks
-            });
-
-            // Send chunks
-            for (let i = 0; i < totalChunks; i++) {
-                const start = i * chunkSize;
-                const end = Math.min(start + chunkSize, fileData.blob.size);
-                const chunk = fileData.blob.slice(start, end);
-
-                conn.send({
-                    type: 'sync-file-chunk',
-                    fileId: fileData.id,
-                    chunkIndex: i,
-                    data: chunk
-                });
-
-                // Small delay to prevent overwhelming the connection
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-
-            // Send completion message
-            conn.send({
-                type: 'sync-file-complete',
-                fileId: fileData.id
-            });
-        }
-    } catch (error) {
-        console.error('Error handling file request:', error);
-    }
-}
-
-// Handle sync file header
-function handleSyncFileHeader(data) {
-    const fileId = data.fileId;
-    fileChunks[fileId] = {
-        name: data.name,
-        type: data.type,
-        size: data.size,
-        chunks: new Array(data.totalChunks),
-        receivedChunks: 0,
-        totalChunks: data.totalChunks
-    };
-}
-
-// Handle sync file chunk
-async function handleSyncFileChunk(data) {
-    const fileId = data.fileId;
-    const fileData = fileChunks[fileId];
-
-    if (fileData) {
-        fileData.chunks[data.chunkIndex] = data.data;
-        fileData.receivedChunks++;
-
-        // Update progress
-        const progress = Math.floor((fileData.receivedChunks / fileData.totalChunks) * 100);
-        updateProgress(progress);
-    }
-}
-
-// Handle sync file complete
-async function handleSyncFileComplete(data) {
-    try {
-        const fileId = data.fileId;
-        const fileData = fileChunks[fileId];
-
-        if (fileData && fileData.receivedChunks === fileData.totalChunks) {
-            // Create blob from chunks
-            const blob = new Blob(fileData.chunks, { type: fileData.type });
-            
-            // Store in IndexedDB
-            const transaction = db.transaction([STORE_NAME], 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            await store.put({
-                id: fileId,
-                blob: blob,
-                name: fileData.name,
-                type: fileData.type,
-                size: fileData.size,
-                timestamp: Date.now()
-            });
-
-            // Update UI
-            const url = URL.createObjectURL(blob);
-            const file = new File([blob], fileData.name, {
-                type: fileData.type,
-                lastModified: Date.now()
-            });
-            addFileToHistory(file, 'received', url);
-
-            // Clean up
-            delete fileChunks[fileId];
-            updateProgress(0);
-            elements.transferProgress.classList.add('hidden');
-
-            // Continue syncing if there are more files
-            syncNextFile();
-        }
-    } catch (error) {
-        console.error('Error completing file sync:', error);
-        syncNextFile(); // Move to next file even if there's an error
-    }
-}
 
 init();

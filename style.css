@@ -37,21 +37,29 @@ header {
 }
 
 .logo-container {
+    margin: 1.5rem 0;
     display: flex;
-    align-items: center;
     justify-content: center;
-    gap: 12px;
-    margin-bottom: 1rem;
+    align-items: center;
 }
 
 .logo {
-    width: 48px;
-    height: 48px;
-    transition: transform 0.3s ease;
+    height: 80px;
+    width: auto;
+    max-width: 90%;
+    transition: transform 0.2s ease;
 }
 
-.logo:hover {
-    transform: rotate(180deg);
+@media (max-width: 768px) {
+    .logo {
+        height: 60px;
+    }
+}
+
+@media (max-width: 480px) {
+    .logo {
+        height: 50px;
+    }
 }
 
 h1 {

@@ -284,6 +284,101 @@ function initPeerJS() {
     }
 }
 
+// Handle data channels on the RTCPeerConnection
+function setupDataChannelHandlers(dataChannel, fileId) {
+    let fileData = null;
+
+    dataChannel.onopen = () => {
+        console.log(`Data channel ${dataChannel.label} opened`);
+    };
+
+    dataChannel.onmessage = async (event) => {
+        try {
+            if (typeof event.data === 'string') {
+                const data = JSON.parse(event.data);
+                if (data.type === 'file-header') {
+                    fileData = {
+                        chunks: [],
+                        fileName: data.fileName,
+                        fileType: data.fileType,
+                        fileSize: data.fileSize,
+                        receivedSize: 0,
+                        originalSender: data.originalSender,
+                        lastProgressUpdate: 0
+                    };
+                    elements.transferProgress.classList.remove('hidden');
+                    updateProgress(0);
+                    updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
+                } else if (data.type === 'file-complete') {
+                    if (!fileData) return;
+
+                    try {
+                        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+                        if (blob.size === fileData.fileSize) {
+                            const fileInfo = {
+                                name: fileData.fileName,
+                                type: fileData.fileType,
+                                size: fileData.fileSize,
+                                id: data.fileId,
+                                blob: blob,
+                                sharedBy: fileData.originalSender
+                            };
+                            addFileToHistory(fileInfo, 'received');
+                            showNotification(`Received ${fileData.fileName}`, 'success');
+                        } else {
+                            throw new Error('Received file size does not match expected size');
+                        }
+                    } catch (error) {
+                        console.error('Error processing completed file:', error);
+                        showNotification(`Error receiving file: ${error.message}`, 'error');
+                    } finally {
+                        fileData = null;
+                        elements.transferProgress.classList.add('hidden');
+                        updateProgress(0);
+                        updateTransferInfo('');
+                        // Close the data channel after a short delay
+                        setTimeout(() => {
+                            if (dataChannel.readyState === 'open') {
+                                dataChannel.close();
+                            }
+                        }, 1000);
+                    }
+                }
+            } else {
+                // Handle binary chunk
+                if (fileData) {
+                    fileData.chunks.push(event.data);
+                    fileData.receivedSize += event.data.byteLength;
+                    const progress = (fileData.receivedSize / fileData.fileSize) * 100;
+                    if (progress - fileData.lastProgressUpdate >= 1) {
+                        updateProgress(progress);
+                        fileData.lastProgressUpdate = progress;
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error handling data channel message:', error);
+            showNotification('Error processing received data', 'error');
+        }
+    };
+
+    dataChannel.onerror = (error) => {
+        console.error('Data channel error:', error);
+        showNotification('Data channel error occurred', 'error');
+    };
+
+    dataChannel.onclose = () => {
+        console.log(`Data channel ${dataChannel.label} closed`);
+        if (fileData) {
+            showNotification(`Transfer interrupted for ${fileData.fileName}`, 'error');
+            elements.transferProgress.classList.add('hidden');
+            updateProgress(0);
+            updateTransferInfo('');
+            fileData = null;
+        }
+    };
+}
+
 // Setup connection event handlers
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
@@ -310,67 +405,8 @@ function setupConnectionHandlers(conn) {
     const peerConnection = conn.peerConnection;
     if (peerConnection) {
         peerConnection.ondatachannel = (event) => {
-            const dataChannel = event.channel;
-            let fileData = null;
-
-            dataChannel.onmessage = async (event) => {
-                try {
-                    if (typeof event.data === 'string') {
-                        const data = JSON.parse(event.data);
-                        if (data.type === 'file-header') {
-                            fileData = {
-                                chunks: [],
-                                fileName: data.fileName,
-                                fileType: data.fileType,
-                                fileSize: data.fileSize,
-                                receivedSize: 0,
-                                originalSender: data.originalSender
-                            };
-                            elements.transferProgress.classList.remove('hidden');
-                            updateProgress(0);
-                            updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
-                        } else if (data.type === 'file-complete') {
-                            // Handle file completion
-                            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-                            if (blob.size === fileData.fileSize) {
-                                const fileInfo = {
-                                    name: fileData.fileName,
-                                    type: fileData.fileType,
-                                    size: fileData.fileSize,
-                                    id: data.fileId,
-                                    blob: blob,
-                                    sharedBy: fileData.originalSender
-                                };
-                                addFileToHistory(fileInfo, 'received');
-                                showNotification(`Received ${fileData.fileName}`, 'success');
-                            } else {
-                                throw new Error('Received file size does not match expected size');
-                            }
-                            // Clean up
-                            fileData = null;
-                            elements.transferProgress.classList.add('hidden');
-                            updateProgress(0);
-                            updateTransferInfo('');
-                        }
-                    } else {
-                        // Handle binary chunk
-                        if (fileData) {
-                            fileData.chunks.push(event.data);
-                            fileData.receivedSize += event.data.byteLength;
-                            const progress = (fileData.receivedSize / fileData.fileSize) * 100;
-                            updateProgress(progress);
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error handling data channel message:', error);
-                    showNotification('Error processing received data', 'error');
-                }
-            };
-
-            dataChannel.onerror = (error) => {
-                console.error('Data channel error:', error);
-                showNotification('Data channel error occurred', 'error');
-            };
+            console.log('Received new data channel:', event.channel.label);
+            setupDataChannelHandlers(event.channel);
         };
     }
 
@@ -654,12 +690,24 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
             maxRetransmits: 3  // Allow up to 3 retransmission attempts
         });
 
+        // Set up handlers for the sending side
+        setupDataChannelHandlers(dataChannel, fileId);
+
         // Wait for the data channel to be ready
         await new Promise((resolve, reject) => {
-            dataChannel.onopen = resolve;
-            dataChannel.onerror = reject;
-            // Set a timeout in case the channel never opens
-            setTimeout(() => reject(new Error('Data channel timed out')), 10000);
+            const timeout = setTimeout(() => {
+                reject(new Error('Data channel timed out'));
+            }, 10000);
+
+            dataChannel.onopen = () => {
+                clearTimeout(timeout);
+                resolve();
+            };
+
+            dataChannel.onerror = (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            };
         });
 
         // Send file header

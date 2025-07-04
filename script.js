@@ -198,8 +198,44 @@ async function shareId() {
         const peerId = elements.peerId.textContent;
         const baseUrl = window.location.origin + window.location.pathname;
         const qrUrl = `${baseUrl}?peer=${peerId}`;
-        await navigator.share({ url: qrUrl });
-        showNotification('Share successful!', 'success');
+        
+        // Get meta tags for consistent sharing
+        const title = document.querySelector('meta[property="og:title"]')?.content || 'One-Host - Secure P2P File Sharing';
+        const description = document.querySelector('meta[property="og:description"]')?.content || 'Share files instantly and securely between devices using One-Host.';
+        
+        // Create share data with rich metadata
+        const shareData = {
+            title: title,
+            text: `${description}\n\nConnect with my Peer ID: ${peerId}`,
+            url: qrUrl
+        };
+
+        // Try to include files if supported (for future use)
+        try {
+            const ogImage = document.querySelector('meta[property="og:image"]')?.content;
+            if (ogImage && navigator.canShare && navigator.canShare({ files: [] })) {
+                const response = await fetch(ogImage);
+                const blob = await response.blob();
+                const file = new File([blob], 'one-host-preview.png', { type: 'image/png' });
+                shareData.files = [file];
+            }
+        } catch (imageError) {
+            console.log('Image sharing not supported:', imageError);
+        }
+
+        // Share with available data
+        if (navigator.canShare && navigator.canShare(shareData)) {
+            await navigator.share(shareData);
+            showNotification('Share successful!', 'success');
+        } else {
+            // Fallback to basic sharing if full metadata sharing is not supported
+            await navigator.share({
+                title: title,
+                text: `Connect with my Peer ID: ${peerId}`,
+                url: qrUrl
+            });
+            showNotification('Share successful!', 'success');
+        }
     } catch (error) {
         if (error.name !== 'AbortError') {
             console.error('Error sharing:', error);

@@ -3,6 +3,8 @@ const CHUNK_SIZE = 16384; // 16KB chunks
 const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
+const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
+const CONNECTION_TIMEOUT = 60000; // 60 seconds
 
 // DOM Elements
 const elements = {
@@ -38,6 +40,9 @@ let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
+let keepAliveInterval = null;
+let connectionTimeouts = new Map();
+let isPageVisible = true;
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -288,6 +293,12 @@ function setupConnectionHandlers(conn) {
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
         
+        // Clear any existing timeout for this connection
+        if (connectionTimeouts.has(conn.peer)) {
+            clearTimeout(connectionTimeouts.get(conn.peer));
+            connectionTimeouts.delete(conn.peer);
+        }
+        
         // Send a connection notification to the other peer
         conn.send({
             type: 'connection-notification',
@@ -299,6 +310,25 @@ function setupConnectionHandlers(conn) {
         try {
             if (data.type === 'connection-notification') {
                 updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+            } else if (data.type === 'keep-alive') {
+                // Handle keep-alive message
+                console.log(`Keep-alive received from peer ${conn.peer}`);
+                // Send keep-alive response
+                conn.send({
+                    type: 'keep-alive-response',
+                    timestamp: Date.now(),
+                    peerId: peer.id
+                });
+            } else if (data.type === 'keep-alive-response') {
+                // Handle keep-alive response
+                console.log(`Keep-alive response received from peer ${conn.peer}`);
+            } else if (data.type === 'disconnect-notification') {
+                // Handle disconnect notification
+                console.log(`Disconnect notification received from peer ${conn.peer}`);
+                connections.delete(conn.peer);
+                updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+                    connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+                showNotification(`Peer ${conn.peer} disconnected`, 'warning');
             } else if (data.type === 'file-update') {
                 // Handle file update notification
                 console.log('Received file update:', data.fileInfo);
@@ -322,6 +352,13 @@ function setupConnectionHandlers(conn) {
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
+        
+        // Clear timeout for this connection
+        if (connectionTimeouts.has(conn.peer)) {
+            clearTimeout(connectionTimeouts.get(conn.peer));
+            connectionTimeouts.delete(conn.peer);
+        }
+        
         updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
             connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
         if (connections.size === 0) {
@@ -335,7 +372,17 @@ function setupConnectionHandlers(conn) {
         console.error('Connection Error:', error);
         updateConnectionStatus('', 'Connection error');
         showNotification('Connection error occurred', 'error');
-        resetConnection();
+        
+        // Set a timeout to attempt reconnection
+        if (!connectionTimeouts.has(conn.peer)) {
+            const timeout = setTimeout(() => {
+                console.log(`Attempting to reconnect to ${conn.peer} after error...`);
+                reconnectToPeer(conn.peer);
+                connectionTimeouts.delete(conn.peer);
+            }, 5000); // Wait 5 seconds before attempting reconnection
+            
+            connectionTimeouts.set(conn.peer, timeout);
+        }
     });
 }
 
@@ -789,6 +836,11 @@ function resetConnection() {
         });
         connections.clear();
     }
+    
+    // Clear all connection timeouts
+    connectionTimeouts.forEach(timeout => clearTimeout(timeout));
+    connectionTimeouts.clear();
+    
     isConnectionReady = false;
     transferInProgress = false;
     fileQueue = []; // Clear the file queue
@@ -900,6 +952,7 @@ function init() {
     initIndexedDB();
     loadRecentPeers();
     checkUrlForPeerId(); // Check URL for peer ID on load
+    initConnectionKeepAlive(); // Initialize connection keep-alive system
 }
 
 // Add CSS classes for notification styling
@@ -1065,5 +1118,121 @@ elements.clearPeers.addEventListener('click', () => {
     updateRecentPeersList();
     elements.recentPeers.classList.add('hidden');
 });
+
+// Initialize connection keep-alive system
+function initConnectionKeepAlive() {
+    // Start keep-alive interval
+    keepAliveInterval = setInterval(() => {
+        if (connections.size > 0 && isPageVisible) {
+            sendKeepAlive();
+        }
+    }, KEEP_ALIVE_INTERVAL);
+
+    // Handle page visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Handle page focus/blur events
+    window.addEventListener('focus', handlePageFocus);
+    window.addEventListener('blur', handlePageBlur);
+    
+    // Handle beforeunload event
+    window.addEventListener('beforeunload', handleBeforeUnload);
+}
+
+// Handle page visibility changes
+function handleVisibilityChange() {
+    isPageVisible = !document.hidden;
+    
+    if (isPageVisible) {
+        console.log('Page became visible, checking connections...');
+        checkConnections();
+    } else {
+        console.log('Page became hidden, maintaining connections...');
+        sendKeepAlive();
+    }
+}
+
+// Handle page focus
+function handlePageFocus() {
+    console.log('Page focused, checking connections...');
+    checkConnections();
+}
+
+// Handle page blur
+function handlePageBlur() {
+    console.log('Page blurred, maintaining connections...');
+    sendKeepAlive();
+}
+
+// Handle beforeunload
+function handleBeforeUnload(event) {
+    if (connections.size > 0) {
+        sendDisconnectNotification();
+    }
+}
+
+// Send keep-alive messages to all connected peers
+function sendKeepAlive() {
+    const keepAliveData = {
+        type: 'keep-alive',
+        timestamp: Date.now(),
+        peerId: peer.id
+    };
+
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open) {
+            try {
+                conn.send(keepAliveData);
+                console.log(`Keep-alive sent to peer ${peerId}`);
+            } catch (error) {
+                console.error(`Failed to send keep-alive to peer ${peerId}:`, error);
+            }
+        }
+    }
+}
+
+// Send disconnect notification to all peers
+function sendDisconnectNotification() {
+    const disconnectData = {
+        type: 'disconnect-notification',
+        peerId: peer.id,
+        timestamp: Date.now()
+    };
+
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open) {
+            try {
+                conn.send(disconnectData);
+            } catch (error) {
+                console.error(`Failed to send disconnect notification to peer ${peerId}:`, error);
+            }
+        }
+    }
+}
+
+// Check and restore connections
+function checkConnections() {
+    for (const [peerId, conn] of connections) {
+        if (!conn.open) {
+            console.log(`Connection to ${peerId} is closed, attempting to reconnect...`);
+            reconnectToPeer(peerId);
+        }
+    }
+}
+
+// Reconnect to a specific peer
+function reconnectToPeer(peerId) {
+    try {
+        console.log(`Attempting to reconnect to peer: ${peerId}`);
+        const newConnection = peer.connect(peerId, {
+            reliable: true
+        });
+        connections.set(peerId, newConnection);
+        setupConnectionHandlers(newConnection);
+    } catch (error) {
+        console.error(`Failed to reconnect to peer ${peerId}:`, error);
+        connections.delete(peerId);
+    }
+}
 
 init();

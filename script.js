@@ -49,6 +49,10 @@ const fileHistory = {
 let recentPeers = [];
 const MAX_RECENT_PEERS = 5;
 
+// Add file queue system
+let fileQueue = [];
+let isProcessingQueue = false;
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -616,7 +620,30 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Send file function
+// Process file queue
+async function processFileQueue() {
+    if (isProcessingQueue || fileQueue.length === 0) return;
+    
+    isProcessingQueue = true;
+    updateTransferInfo(`Processing queue: ${fileQueue.length} file(s) remaining`);
+    
+    while (fileQueue.length > 0) {
+        const file = fileQueue.shift();
+        try {
+            await sendFile(file);
+            // Small delay between files to prevent overwhelming the connection
+            await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+            console.error('Error processing file from queue:', error);
+            showNotification(`Failed to send ${file.name}: ${error.message}`, 'error');
+        }
+    }
+    
+    isProcessingQueue = false;
+    updateTransferInfo('');
+}
+
+// Modify sendFile function to work with queue
 async function sendFile(file) {
     if (connections.size === 0) {
         showNotification('Please connect to at least one peer first', 'error');
@@ -624,7 +651,9 @@ async function sendFile(file) {
     }
 
     if (transferInProgress) {
-        showNotification('Please wait for the current transfer to complete', 'warning');
+        // Add to queue instead of showing warning
+        fileQueue.push(file);
+        showNotification(`${file.name} added to queue`, 'info');
         return;
     }
 
@@ -632,6 +661,7 @@ async function sendFile(file) {
         transferInProgress = true;
         elements.transferProgress.classList.remove('hidden');
         updateProgress(0);
+        updateTransferInfo(`Sending ${file.name}...`);
 
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
@@ -667,17 +697,20 @@ async function sendFile(file) {
         }
 
         if (successCount > 0) {
-            showNotification(`File sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
+            showNotification(`${file.name} sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
         } else {
             throw new Error('Failed to send file to any peers: ' + errors.join(', '));
         }
     } catch (error) {
         console.error('File send error:', error);
         showNotification(error.message, 'error');
+        throw error; // Propagate error for queue processing
     } finally {
         transferInProgress = false;
         elements.transferProgress.classList.add('hidden');
         updateProgress(0);
+        // Process next file in queue if any
+        processFileQueue();
     }
 }
 
@@ -758,6 +791,8 @@ function resetConnection() {
     }
     isConnectionReady = false;
     transferInProgress = false;
+    fileQueue = []; // Clear the file queue
+    isProcessingQueue = false;
     elements.fileTransferSection.classList.add('hidden');
     elements.transferProgress.classList.add('hidden');
     elements.progress.style.width = '0%';
@@ -814,7 +849,13 @@ elements.dropZone.addEventListener('drop', (e) => {
     
     if (connections.size > 0) {
         const files = e.dataTransfer.files;
-        Array.from(files).forEach(sendFile);
+        if (files.length > 1) {
+            showNotification(`Processing ${files.length} files`, 'info');
+        }
+        Array.from(files).forEach(file => {
+            fileQueue.push(file);
+        });
+        processFileQueue();
     } else {
         showNotification('Please connect to at least one peer first', 'error');
     }
@@ -829,12 +870,18 @@ elements.dropZone.addEventListener('click', () => {
     }
 });
 
-// Add file input change handler
+// Update file input change handler
 elements.fileInput.addEventListener('change', (e) => {
     if (connections.size > 0) {
         const files = e.target.files;
         if (files.length > 0) {
-            Array.from(files).forEach(sendFile);
+            if (files.length > 1) {
+                showNotification(`Processing ${files.length} files`, 'info');
+            }
+            Array.from(files).forEach(file => {
+                fileQueue.push(file);
+            });
+            processFileQueue();
         }
         // Reset the input so the same file can be selected again
         e.target.value = '';

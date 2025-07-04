@@ -1,5 +1,6 @@
 // Constants
-const CHUNK_SIZE = 16384; // 16KB chunks
+const CHUNK_SIZE = 262144; // Increase to 256KB chunks for faster transfer
+const BUFFER_THRESHOLD = 16 * 1024 * 1024; // 16MB buffer threshold
 const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
@@ -525,10 +526,9 @@ async function handleFileComplete(data) {
         // Add to history
         addFileToHistory(fileInfo, 'received');
 
-        // If this is the host peer (the first to create the connection),
-        // forward the file to other connected peers
-        if (peer.id !== fileInfo.sharedBy && connections.size > 1) {
-            console.log('Forwarding file to other peers as host');
+        // Forward to other peers (removed host-only restriction)
+        if (connections.size > 1) {
+            console.log('Forwarding file to other connected peers');
             await forwardFileToPeers(fileInfo, data.fileId);
         }
 
@@ -544,12 +544,122 @@ async function handleFileComplete(data) {
     }
 }
 
+// Send file to a specific peer
+async function sendFileToPeer(file, conn, fileId, fileBlob) {
+    try {
+        if (!conn.open) {
+            throw new Error('Connection is not open');
+        }
+
+        // Get the underlying RTCPeerConnection
+        const peerConnection = conn.peerConnection;
+        if (!peerConnection) {
+            throw new Error('No RTCPeerConnection available');
+        }
+
+        // Create a dedicated data channel for this file transfer
+        const dataChannelId = `file_${fileId}_${Date.now()}`;
+        const dataChannel = peerConnection.createDataChannel(dataChannelId, {
+            ordered: true,
+            maxRetransmits: 3,  // Allow up to 3 retransmission attempts
+            maxPacketLifeTime: 5000  // 5 seconds max packet lifetime
+        });
+
+        // Set up handlers for the sending side
+        setupDataChannelHandlers(dataChannel, fileId);
+
+        // Wait for the data channel to be ready
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Data channel timed out'));
+            }, 10000);
+
+            dataChannel.onopen = () => {
+                clearTimeout(timeout);
+                resolve();
+            };
+
+            dataChannel.onerror = (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            };
+        });
+
+        // Send file header
+        dataChannel.send(JSON.stringify({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        }));
+
+        // Convert blob to array buffer once
+        const buffer = await fileBlob.arrayBuffer();
+        let offset = 0;
+        let lastProgressUpdate = 0;
+        
+        while (offset < file.size) {
+            if (dataChannel.readyState !== 'open') {
+                throw new Error('Data channel closed during transfer');
+            }
+
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            
+            // Check the channel's bufferedAmount and wait if necessary
+            while (dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+                // Update transfer info to show buffering status
+                const bufferedPercent = Math.round((dataChannel.bufferedAmount / BUFFER_THRESHOLD) * 100);
+                updateTransferInfo(`Buffering... ${bufferedPercent}% buffer used`);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            dataChannel.send(chunk);
+            offset += chunk.byteLength;
+            
+            // Update progress more smoothly (update every 1% change)
+            const currentProgress = (offset / file.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress);
+                lastProgressUpdate = currentProgress;
+                updateTransferInfo(`Sending ${file.name} - ${Math.round(currentProgress)}%`);
+            }
+        }
+
+        // Ensure final progress is shown
+        updateProgress(100);
+
+        // Send completion message
+        dataChannel.send(JSON.stringify({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        }));
+
+        // Close the dedicated data channel after transfer
+        setTimeout(() => {
+            if (dataChannel.readyState === 'open') {
+                dataChannel.close();
+            }
+        }, 1000);
+
+        console.log(`File sent successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error sending file to peer ${conn.peer}:`, error);
+        throw error;
+    }
+}
+
 // Forward file to other connected peers
 async function forwardFileToPeers(fileInfo, fileId) {
     const forwardPromises = [];
     
     for (const [peerId, conn] of connections) {
-        // Don't send back to the original sender
+        // Don't send back to the original sender or to peers that already have the file
         if (peerId !== fileInfo.sharedBy && conn && conn.open) {
             forwardPromises.push(forwardFileToPeer(fileInfo, conn, fileId));
         }
@@ -561,6 +671,7 @@ async function forwardFileToPeers(fileInfo, fileId) {
             console.log('File forwarded to all peers successfully');
         } catch (error) {
             console.error('Error forwarding file to some peers:', error);
+            // Continue with successful transfers even if some fail
         }
     }
 }
@@ -570,43 +681,81 @@ async function forwardFileToPeer(fileInfo, conn, fileId) {
     try {
         console.log(`Forwarding file to peer ${conn.peer}`);
         
+        // Create a new data channel for forwarding
+        const peerConnection = conn.peerConnection;
+        if (!peerConnection) {
+            throw new Error('No RTCPeerConnection available');
+        }
+
+        const dataChannelId = `forward_${fileId}_${Date.now()}`;
+        const dataChannel = peerConnection.createDataChannel(dataChannelId, {
+            ordered: true,
+            maxRetransmits: 3,
+            maxPacketLifeTime: 5000
+        });
+
+        // Set up handlers for the forwarding side
+        setupDataChannelHandlers(dataChannel, fileId);
+
+        // Wait for the data channel to be ready
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Data channel timed out')), 10000);
+            dataChannel.onopen = () => {
+                clearTimeout(timeout);
+                resolve();
+            };
+            dataChannel.onerror = (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            };
+        });
+
         // Send file header
-        conn.send({
+        dataChannel.send(JSON.stringify({
             type: 'file-header',
             fileId: fileId,
             fileName: fileInfo.name,
             fileType: fileInfo.type,
             fileSize: fileInfo.size,
-            originalSender: fileInfo.sharedBy // Preserve original sender
-        });
+            originalSender: fileInfo.sharedBy
+        }));
 
         // Convert blob to array buffer
         const buffer = await fileInfo.blob.arrayBuffer();
         let offset = 0;
-        const chunkSize = CHUNK_SIZE;
-
+        
         while (offset < fileInfo.size) {
-            const chunk = buffer.slice(offset, offset + chunkSize);
-            conn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset,
-                originalSender: fileInfo.sharedBy
-            });
+            if (dataChannel.readyState !== 'open') {
+                throw new Error('Data channel closed during forwarding');
+            }
 
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            
+            // Check the channel's bufferedAmount and wait if necessary
+            while (dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            dataChannel.send(chunk);
             offset += chunk.byteLength;
         }
 
         // Send completion message
-        conn.send({
+        dataChannel.send(JSON.stringify({
             type: 'file-complete',
             fileId: fileId,
             fileName: fileInfo.name,
             fileType: fileInfo.type,
             fileSize: fileInfo.size,
             originalSender: fileInfo.sharedBy
-        });
+        }));
+
+        // Close the data channel after forwarding
+        setTimeout(() => {
+            if (dataChannel.readyState === 'open') {
+                dataChannel.close();
+            }
+        }, 1000);
 
         console.log(`File forwarded successfully to peer ${conn.peer}`);
     } catch (error) {
@@ -679,111 +828,6 @@ function broadcastFileUpdate(fileInfo) {
         if (conn.open) {
             conn.send(updateData);
         }
-    }
-}
-
-// Send file to a specific peer
-async function sendFileToPeer(file, conn, fileId, fileBlob) {
-    try {
-        if (!conn.open) {
-            throw new Error('Connection is not open');
-        }
-
-        // Get the underlying RTCPeerConnection
-        const peerConnection = conn.peerConnection;
-        if (!peerConnection) {
-            throw new Error('No RTCPeerConnection available');
-        }
-
-        // Create a dedicated data channel for this file transfer
-        const dataChannelId = `file_${fileId}_${Date.now()}`;
-        const dataChannel = peerConnection.createDataChannel(dataChannelId, {
-            ordered: true,
-            maxRetransmits: 3  // Allow up to 3 retransmission attempts
-        });
-
-        // Set up handlers for the sending side
-        setupDataChannelHandlers(dataChannel, fileId);
-
-        // Wait for the data channel to be ready
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Data channel timed out'));
-            }, 10000);
-
-            dataChannel.onopen = () => {
-                clearTimeout(timeout);
-                resolve();
-            };
-
-            dataChannel.onerror = (error) => {
-                clearTimeout(timeout);
-                reject(error);
-            };
-        });
-
-        // Send file header
-        dataChannel.send(JSON.stringify({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            originalSender: peer.id
-        }));
-
-        // Convert blob to array buffer once
-        const buffer = await fileBlob.arrayBuffer();
-        let offset = 0;
-        let lastProgressUpdate = 0;
-        
-        while (offset < file.size) {
-            if (dataChannel.readyState !== 'open') {
-                throw new Error('Data channel closed during transfer');
-            }
-
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            
-            // Check the channel's bufferedAmount to prevent overwhelming it
-            while (dataChannel.bufferedAmount > 16 * 1024 * 1024) { // 16MB buffer threshold
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-
-            dataChannel.send(chunk);
-            offset += chunk.byteLength;
-            
-            // Update progress more smoothly (update every 1% change)
-            const currentProgress = (offset / file.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
-                lastProgressUpdate = currentProgress;
-            }
-        }
-
-        // Ensure final progress is shown
-        updateProgress(100);
-
-        // Send completion message
-        dataChannel.send(JSON.stringify({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            originalSender: peer.id
-        }));
-
-        // Close the dedicated data channel after transfer
-        setTimeout(() => {
-            if (dataChannel.readyState === 'open') {
-                dataChannel.close();
-            }
-        }, 1000);
-
-        console.log(`File sent successfully to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error sending file to peer ${conn.peer}:`, error);
-        throw error;
     }
 }
 

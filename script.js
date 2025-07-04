@@ -280,7 +280,7 @@ function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
         isConnectionReady = true;
-        updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
         
@@ -294,7 +294,7 @@ function setupConnectionHandlers(conn) {
     conn.on('data', async (data) => {
         try {
             if (data.type === 'connection-notification') {
-                updateConnectionStatus('connected', `Connected to ${connections.size} peer(s)`);
+                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
             } else if (data.type === 'file-update') {
                 // Handle file update notification
                 console.log('Received file update:', data.fileInfo);
@@ -319,7 +319,7 @@ function setupConnectionHandlers(conn) {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
         updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected');
+            connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
         if (connections.size === 0) {
             showNotification('All peers disconnected', 'error');
         } else {

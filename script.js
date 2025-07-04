@@ -198,49 +198,8 @@ async function shareId() {
         const peerId = elements.peerId.textContent;
         const baseUrl = window.location.origin + window.location.pathname;
         const qrUrl = `${baseUrl}?peer=${peerId}`;
-        
-        // Get meta tags for consistent sharing
-        const title = document.querySelector('meta[property="og:title"]')?.content || 'One-Host - Secure P2P File Sharing';
-        const description = document.querySelector('meta[property="og:description"]')?.content || 'Share files instantly and securely between devices using One-Host.';
-        
-        // Basic share data that works on all platforms
-        const shareData = {
-            title: title,
-            text: `${description}\n\nConnect with my Peer ID: ${peerId}`,
-            url: qrUrl
-        };
-
-        // Check if the browser supports file sharing
-        if (navigator.canShare && navigator.canShare({ files: [] })) {
-            try {
-                // Try the square image first as it's smaller and more likely to work
-                const squareImageUrl = document.querySelector('link[rel="apple-touch-icon"]')?.href;
-                if (squareImageUrl) {
-                    const response = await fetch(squareImageUrl);
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        const file = new File([blob], 'one-host-icon.png', { type: 'image/png' });
-                        shareData.files = [file];
-                    }
-                }
-            } catch (imageError) {
-                console.log('Image sharing not supported:', imageError);
-            }
-        }
-
-        // Try sharing with all data first
-        if (navigator.canShare && navigator.canShare(shareData)) {
-            await navigator.share(shareData);
-            showNotification('Share successful!', 'success');
-        } else {
-            // Fallback to basic sharing without files
-            await navigator.share({
-                title: title,
-                text: `${description}\n\nConnect with my Peer ID: ${peerId}`,
-                url: qrUrl
-            });
-            showNotification('Share successful!', 'success');
-        }
+        await navigator.share({ url: qrUrl });
+        showNotification('Share successful!', 'success');
     } catch (error) {
         if (error.name !== 'AbortError') {
             console.error('Error sharing:', error);

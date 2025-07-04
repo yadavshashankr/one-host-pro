@@ -415,8 +415,12 @@ async function handleFileChunk(data) {
     fileData.chunks.push(data.data);
     fileData.receivedSize += data.data.byteLength;
     
-    const progress = (fileData.receivedSize / fileData.fileSize) * 100;
-    updateProgress(progress);
+    // Update progress more smoothly (update every 1% change)
+    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
+        updateProgress(currentProgress);
+        fileData.lastProgressUpdate = currentProgress;
+    }
 }
 
 // Handle file completion
@@ -625,6 +629,7 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
         // Convert blob to array buffer once
         const buffer = await fileBlob.arrayBuffer();
         let offset = 0;
+        let lastProgressUpdate = 0;
         
         while (offset < file.size) {
             if (!conn.open) {
@@ -641,9 +646,17 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
             });
 
             offset += chunk.byteLength;
-            const progress = Math.min((offset / file.size) * 100, 100);
-            updateProgress(progress);
+            
+            // Update progress more smoothly (update every 1% change)
+            const currentProgress = (offset / file.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress);
+                lastProgressUpdate = currentProgress;
+            }
         }
+
+        // Ensure final progress is shown
+        updateProgress(100);
 
         // Verify connection is still open before sending completion
         if (!conn.open) {
@@ -763,14 +776,15 @@ async function sendFile(file) {
 
 // Update progress bar
 function updateProgress(percent) {
-    if (!transferInProgress) return;
     const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
     elements.progress.style.width = `${progress}%`;
+    elements.transferInfo.style.display = 'block';
     
-    if (progress > 0 && progress < 100) {
-        elements.transferInfo.style.display = 'block';
-    } else {
-        elements.transferInfo.style.display = 'none';
+    // Only hide transfer info when transfer is complete and progress is 100%
+    if (progress === 100) {
+        setTimeout(() => {
+            elements.transferInfo.style.display = 'none';
+        }, 1000); // Keep the 100% visible briefly
     }
 }
 

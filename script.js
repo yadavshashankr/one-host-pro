@@ -306,47 +306,69 @@ function setupConnectionHandlers(conn) {
         });
     });
 
-    conn.on('data', async (data) => {
-        try {
-            if (data.type === 'connection-notification') {
-                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-            } else if (data.type === 'keep-alive') {
-                // Handle keep-alive message
-                console.log(`Keep-alive received from peer ${conn.peer}`);
-                // Send keep-alive response
-                conn.send({
-                    type: 'keep-alive-response',
-                    timestamp: Date.now(),
-                    peerId: peer.id
-                });
-            } else if (data.type === 'keep-alive-response') {
-                // Handle keep-alive response
-                console.log(`Keep-alive response received from peer ${conn.peer}`);
-            } else if (data.type === 'disconnect-notification') {
-                // Handle disconnect notification
-                console.log(`Disconnect notification received from peer ${conn.peer}`);
-                connections.delete(conn.peer);
-                updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                    connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-                showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-            } else if (data.type === 'file-update') {
-                // Handle file update notification
-                console.log('Received file update:', data.fileInfo);
-                const fileId = data.fileInfo.id;
-                if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
-                    addFileToHistory(data.fileInfo, 'received');
+    conn.on('datachannel', async (event) => {
+        const dataChannel = event.channel;
+        const channelId = dataChannel.label;
+        let fileData = null;
+
+        dataChannel.onmessage = async (event) => {
+            try {
+                if (typeof event.data === 'string') {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'file-header') {
+                        fileData = {
+                            chunks: [],
+                            fileName: data.fileName,
+                            fileType: data.fileType,
+                            fileSize: data.fileSize,
+                            receivedSize: 0,
+                            originalSender: data.originalSender
+                        };
+                        elements.transferProgress.classList.remove('hidden');
+                        updateProgress(0);
+                        updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
+                    } else if (data.type === 'file-complete') {
+                        // Handle file completion
+                        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+                        if (blob.size === fileData.fileSize) {
+                            const fileInfo = {
+                                name: fileData.fileName,
+                                type: fileData.fileType,
+                                size: fileData.fileSize,
+                                id: data.fileId,
+                                blob: blob,
+                                sharedBy: fileData.originalSender
+                            };
+                            addFileToHistory(fileInfo, 'received');
+                            showNotification(`Received ${fileData.fileName}`, 'success');
+                        } else {
+                            throw new Error('Received file size does not match expected size');
+                        }
+                        // Clean up
+                        fileData = null;
+                        elements.transferProgress.classList.add('hidden');
+                        updateProgress(0);
+                        updateTransferInfo('');
+                    }
+                } else {
+                    // Handle binary chunk
+                    if (fileData) {
+                        fileData.chunks.push(event.data);
+                        fileData.receivedSize += event.data.byteLength;
+                        const progress = (fileData.receivedSize / fileData.fileSize) * 100;
+                        updateProgress(progress);
+                    }
                 }
-            } else if (data.type === 'file-header') {
-                await handleFileHeader(data);
-            } else if (data.type === 'file-chunk') {
-                await handleFileChunk(data);
-            } else if (data.type === 'file-complete') {
-                await handleFileComplete(data);
+            } catch (error) {
+                console.error('Error handling data channel message:', error);
+                showNotification('Error processing received data', 'error');
             }
-        } catch (error) {
-            console.error('Data handling error:', error);
-            showNotification('Error processing received data', 'error');
-        }
+        };
+
+        dataChannel.onerror = (error) => {
+            console.error('Data channel error:', error);
+            showNotification('Data channel error occurred', 'error');
+        };
     });
 
     conn.on('close', () => {
@@ -616,15 +638,30 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
             throw new Error('Connection is not open');
         }
 
+        // Create a dedicated data channel for this file transfer
+        const dataChannelId = `file_${fileId}_${Date.now()}`;
+        const dataChannel = conn.createDataChannel(dataChannelId, {
+            ordered: true,
+            maxRetransmits: 3  // Allow up to 3 retransmission attempts
+        });
+
+        // Wait for the data channel to be ready
+        await new Promise((resolve, reject) => {
+            dataChannel.onopen = resolve;
+            dataChannel.onerror = reject;
+            // Set a timeout in case the channel never opens
+            setTimeout(() => reject(new Error('Data channel timed out')), 10000);
+        });
+
         // Send file header
-        conn.send({
+        dataChannel.send(JSON.stringify({
             type: 'file-header',
             fileId: fileId,
             fileName: file.name,
             fileType: file.type,
             fileSize: file.size,
             originalSender: peer.id
-        });
+        }));
 
         // Convert blob to array buffer once
         const buffer = await fileBlob.arrayBuffer();
@@ -632,19 +669,18 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
         let lastProgressUpdate = 0;
         
         while (offset < file.size) {
-            if (!conn.open) {
-                throw new Error('Connection lost during transfer');
+            if (!dataChannel.readyState === 'open') {
+                throw new Error('Data channel closed during transfer');
             }
 
             const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            conn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset,
-                originalSender: peer.id
-            });
+            
+            // Check the channel's bufferedAmount to prevent overwhelming it
+            while (dataChannel.bufferedAmount > 16 * 1024 * 1024) { // 16MB buffer threshold
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
 
+            dataChannel.send(chunk);
             offset += chunk.byteLength;
             
             // Update progress more smoothly (update every 1% change)
@@ -658,25 +694,27 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
         // Ensure final progress is shown
         updateProgress(100);
 
-        // Verify connection is still open before sending completion
-        if (!conn.open) {
-            throw new Error('Connection lost before completion');
-        }
-
         // Send completion message
-        conn.send({
+        dataChannel.send(JSON.stringify({
             type: 'file-complete',
             fileId: fileId,
             fileName: file.name,
             fileType: file.type,
             fileSize: file.size,
             originalSender: peer.id
-        });
+        }));
+
+        // Close the dedicated data channel after transfer
+        setTimeout(() => {
+            if (dataChannel.readyState === 'open') {
+                dataChannel.close();
+            }
+        }, 1000);
 
         console.log(`File sent successfully to peer ${conn.peer}`);
     } catch (error) {
         console.error(`Error sending file to peer ${conn.peer}:`, error);
-        throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
+        throw error;
     }
 }
 

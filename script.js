@@ -721,7 +721,7 @@ async function sendFile(file) {
         transferInProgress = true;
         elements.transferProgress.classList.remove('hidden');
         updateProgress(0);
-        updateTransferInfo(`Sending ${file.name}...`);
+        updateTransferInfo(`Sending ${file.name} to ${connections.size} peer(s)...`);
 
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
@@ -740,24 +740,36 @@ async function sendFile(file) {
         };
         addFileToHistory(fileInfo, 'sent');
 
-        // Send to all connected peers
+        // Send to all connected peers in parallel
         const sendPromises = [];
-        let successCount = 0;
-        const errors = [];
+        const peerConnections = [];
 
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
-                try {
-                    await sendFileToPeer(file, conn, fileId, fileBlob);
-                    successCount++;
-                } catch (error) {
-                    errors.push(error.message);
-                }
+                peerConnections.push({ peerId, conn });
+                sendPromises.push(sendFileToPeer(file, conn, fileId, fileBlob));
             }
         }
 
+        // Wait for all transfers to complete in parallel
+        const results = await Promise.allSettled(sendPromises);
+        
+        let successCount = 0;
+        const errors = [];
+
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                successCount++;
+                console.log(`File sent successfully to peer ${peerConnections[index].peerId}`);
+            } else {
+                const error = result.reason;
+                errors.push(`Peer ${peerConnections[index].peerId}: ${error.message}`);
+                console.error(`Failed to send to peer ${peerConnections[index].peerId}:`, error);
+            }
+        });
+
         if (successCount > 0) {
-            showNotification(`${file.name} sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
+            showNotification(`${file.name} sent successfully to ${successCount}/${peerConnections.length} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
         } else {
             throw new Error('Failed to send file to any peers: ' + errors.join(', '));
         }

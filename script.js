@@ -203,35 +203,40 @@ async function shareId() {
         const title = document.querySelector('meta[property="og:title"]')?.content || 'One-Host - Secure P2P File Sharing';
         const description = document.querySelector('meta[property="og:description"]')?.content || 'Share files instantly and securely between devices using One-Host.';
         
-        // Create share data with rich metadata
+        // Basic share data that works on all platforms
         const shareData = {
             title: title,
             text: `${description}\n\nConnect with my Peer ID: ${peerId}`,
             url: qrUrl
         };
 
-        // Try to include files if supported (for future use)
-        try {
-            const ogImage = document.querySelector('meta[property="og:image"]')?.content;
-            if (ogImage && navigator.canShare && navigator.canShare({ files: [] })) {
-                const response = await fetch(ogImage);
-                const blob = await response.blob();
-                const file = new File([blob], 'one-host-preview.png', { type: 'image/png' });
-                shareData.files = [file];
+        // Check if the browser supports file sharing
+        if (navigator.canShare && navigator.canShare({ files: [] })) {
+            try {
+                // Try the square image first as it's smaller and more likely to work
+                const squareImageUrl = document.querySelector('link[rel="apple-touch-icon"]')?.href;
+                if (squareImageUrl) {
+                    const response = await fetch(squareImageUrl);
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const file = new File([blob], 'one-host-icon.png', { type: 'image/png' });
+                        shareData.files = [file];
+                    }
+                }
+            } catch (imageError) {
+                console.log('Image sharing not supported:', imageError);
             }
-        } catch (imageError) {
-            console.log('Image sharing not supported:', imageError);
         }
 
-        // Share with available data
+        // Try sharing with all data first
         if (navigator.canShare && navigator.canShare(shareData)) {
             await navigator.share(shareData);
             showNotification('Share successful!', 'success');
         } else {
-            // Fallback to basic sharing if full metadata sharing is not supported
+            // Fallback to basic sharing without files
             await navigator.share({
                 title: title,
-                text: `Connect with my Peer ID: ${peerId}`,
+                text: `${description}\n\nConnect with my Peer ID: ${peerId}`,
                 url: qrUrl
             });
             showNotification('Share successful!', 'success');

@@ -234,13 +234,13 @@ function initPeerJS() {
             elements.peerId.textContent = id;
             updateConnectionStatus('', 'Ready to connect');
             generateQRCode(id);
-            initShareButton(); // Initialize share button after getting peer ID
+            initShareButton();
         });
 
         peer.on('connection', (conn) => {
             console.log('Incoming connection from:', conn.peer);
+            // Accept connection immediately
             connections.set(conn.peer, conn);
-            updateConnectionStatus('connecting', 'Incoming connection...');
             setupConnectionHandlers(conn);
         });
 
@@ -248,7 +248,6 @@ function initPeerJS() {
             console.error('PeerJS Error:', error);
             let errorMessage = 'Connection error';
             
-            // Handle specific error types
             if (error.type === 'peer-unavailable') {
                 errorMessage = 'Peer is not available or does not exist';
             } else if (error.type === 'network') {
@@ -269,7 +268,6 @@ function initPeerJS() {
             updateConnectionStatus('', 'Disconnected');
             isConnectionReady = false;
             
-            // Try to reconnect
             setTimeout(() => {
                 if (peer && peer.disconnected) {
                     console.log('Attempting to reconnect...');
@@ -284,16 +282,33 @@ function initPeerJS() {
     }
 }
 
-// Handle data channels on the RTCPeerConnection
+// Handle data channels
 function setupDataChannelHandlers(dataChannel, fileId) {
     let fileData = null;
+    let transferTimeout = null;
+    let lastActivityTimestamp = Date.now();
+    const TRANSFER_TIMEOUT = 10000; // 10 seconds timeout
+
+    function checkTransferTimeout() {
+        const now = Date.now();
+        if (fileData && (now - lastActivityTimestamp) > TRANSFER_TIMEOUT) {
+            console.error('Transfer timeout - no activity for 10 seconds');
+            showNotification(`Transfer timeout for ${fileData.fileName} - no activity for 10 seconds`, 'error');
+            if (dataChannel.readyState === 'open') {
+                dataChannel.close();
+            }
+        }
+    }
 
     dataChannel.onopen = () => {
         console.log(`Data channel ${dataChannel.label} opened`);
+        // Start transfer timeout checker
+        transferTimeout = setInterval(checkTransferTimeout, 5000);
     };
 
     dataChannel.onmessage = async (event) => {
         try {
+            lastActivityTimestamp = Date.now(); // Update activity timestamp
             if (typeof event.data === 'string') {
                 const data = JSON.parse(event.data);
                 if (data.type === 'file-header') {
@@ -332,16 +347,11 @@ function setupDataChannelHandlers(dataChannel, fileId) {
                         console.error('Error processing completed file:', error);
                         showNotification(`Error receiving file: ${error.message}`, 'error');
                     } finally {
+                        clearInterval(transferTimeout);
                         fileData = null;
                         elements.transferProgress.classList.add('hidden');
                         updateProgress(0);
                         updateTransferInfo('');
-                        // Close the data channel after a short delay
-                        setTimeout(() => {
-                            if (dataChannel.readyState === 'open') {
-                                dataChannel.close();
-                            }
-                        }, 1000);
                     }
                 }
             } else {
@@ -365,10 +375,12 @@ function setupDataChannelHandlers(dataChannel, fileId) {
     dataChannel.onerror = (error) => {
         console.error('Data channel error:', error);
         showNotification('Data channel error occurred', 'error');
+        clearInterval(transferTimeout);
     };
 
     dataChannel.onclose = () => {
         console.log(`Data channel ${dataChannel.label} closed`);
+        clearInterval(transferTimeout);
         if (fileData) {
             showNotification(`Transfer interrupted for ${fileData.fileName}`, 'error');
             elements.transferProgress.classList.add('hidden');

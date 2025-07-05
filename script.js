@@ -61,6 +61,9 @@ const MAX_RECENT_PEERS = 5;
 let fileQueue = [];
 let isProcessingQueue = false;
 
+// Add downloaded files tracking
+const downloadedFiles = new Set();
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -866,32 +869,130 @@ function updateProgress(percent) {
     }
 }
 
-// UI Functions
-function addFileToList(name, url, size) {
+// Update the addFileToList function to include download status
+function addFileToList(name, url, size, isDownloaded = false) {
     const li = document.createElement('li');
-    const nameSpan = document.createElement('span');
-    nameSpan.textContent = `${name} (${formatFileSize(size)})`;
+    const icon = document.createElement('span');
+    icon.className = 'material-icons';
+    icon.textContent = getFileIcon(name.split('.').pop().toLowerCase());
+
+    const fileInfo = document.createElement('div');
+    fileInfo.className = 'file-info';
+
+    const fileName = document.createElement('div');
+    fileName.className = 'file-name';
+    fileName.textContent = name;
+
+    const fileSize = document.createElement('div');
+    fileSize.className = 'file-size';
+    fileSize.textContent = formatFileSize(size);
+
+    const fileStatus = document.createElement('div');
+    fileStatus.className = 'file-status';
+
+    const downloadProgress = document.createElement('div');
+    downloadProgress.className = 'download-progress';
+    downloadProgress.style.width = '0%';
+
+    fileInfo.appendChild(fileName);
+    fileInfo.appendChild(fileSize);
+    fileInfo.appendChild(fileStatus);
+
+    const downloadButton = document.createElement('button');
+    downloadButton.className = 'download-button';
     
-    const downloadBtn = document.createElement('a');
-    downloadBtn.href = url;
-    downloadBtn.download = name;
-    downloadBtn.className = 'button';
-    downloadBtn.textContent = 'Download';
-    
-    // Add click handler to handle blob URL cleanup
-    downloadBtn.addEventListener('click', () => {
-        setTimeout(() => {
-            URL.revokeObjectURL(url);
-        }, 1000);
-    });
-    
-    li.appendChild(nameSpan);
-    li.appendChild(downloadBtn);
-    elements.fileList.appendChild(li);
-    
-    if (elements.receivedFiles) {
-        elements.receivedFiles.classList.remove('hidden');
+    if (isDownloaded || downloadedFiles.has(name)) {
+        downloadButton.disabled = true;
+        const downloadedIcon = document.createElement('span');
+        downloadedIcon.className = 'material-icons file-downloaded-icon';
+        downloadedIcon.textContent = 'check_circle';
+        fileStatus.appendChild(downloadedIcon);
+        fileStatus.appendChild(document.createTextNode('Downloaded'));
+        fileStatus.classList.add('downloaded');
+    } else {
+        const downloadIcon = document.createElement('span');
+        downloadIcon.className = 'material-icons';
+        downloadIcon.textContent = 'download';
+        downloadButton.appendChild(downloadIcon);
+        downloadButton.appendChild(document.createTextNode('Download'));
+        
+        downloadButton.onclick = async () => {
+            try {
+                downloadButton.disabled = true;
+                fileStatus.textContent = 'Downloading...';
+                fileStatus.classList.add('downloading');
+                
+                const response = await fetch(url);
+                const contentLength = response.headers.get('content-length');
+                const total = parseInt(contentLength, 10);
+                let loaded = 0;
+
+                const reader = response.body.getReader();
+                const chunks = [];
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    loaded += value.length;
+                    
+                    // Update progress
+                    const progress = (loaded / total) * 100;
+                    downloadProgress.style.width = `${progress}%`;
+                }
+
+                const blob = new Blob(chunks);
+                downloadBlob(blob, name);
+                downloadedFiles.add(name);
+                
+                // Update UI to show downloaded state
+                downloadButton.innerHTML = '';
+                const downloadedIcon = document.createElement('span');
+                downloadedIcon.className = 'material-icons file-downloaded-icon';
+                downloadedIcon.textContent = 'check_circle';
+                downloadButton.appendChild(downloadedIcon);
+                downloadButton.disabled = true;
+                
+                fileStatus.innerHTML = '';
+                fileStatus.appendChild(downloadedIcon.cloneNode(true));
+                fileStatus.appendChild(document.createTextNode('Downloaded'));
+                fileStatus.classList.remove('downloading');
+                fileStatus.classList.add('downloaded');
+                
+                // Hide progress bar
+                downloadProgress.style.width = '0%';
+                
+            } catch (error) {
+                console.error('Download failed:', error);
+                downloadButton.disabled = false;
+                fileStatus.textContent = 'Download failed';
+                fileStatus.style.color = 'var(--error-color)';
+                showNotification('Download failed', 'error');
+            }
+        };
     }
+
+    li.appendChild(icon);
+    li.appendChild(fileInfo);
+    li.appendChild(downloadButton);
+    li.appendChild(downloadProgress);
+
+    elements.fileList.appendChild(li);
+    return li;
+}
+
+// Update the downloadBlob function to track downloaded files
+function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    downloadedFiles.add(fileName);
 }
 
 function formatFileSize(bytes) {
@@ -1323,18 +1424,6 @@ function reconnectToPeer(peerId) {
         console.error(`Failed to reconnect to peer ${peerId}:`, error);
         connections.delete(peerId);
     }
-}
-
-// Function to download a blob
-function downloadBlob(blob, fileName) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 init();

@@ -50,9 +50,6 @@ const fileHistory = {
     received: new Set()
 };
 
-// Add blob storage for sent files
-const sentFileBlobs = new Map(); // Map to store blobs of sent files
-
 // Add recent peers tracking
 let recentPeers = [];
 const MAX_RECENT_PEERS = 5;
@@ -332,23 +329,12 @@ function setupConnectionHandlers(conn) {
                 updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
                     connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
                 showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-            } else if (data.type === 'file-info') {
-                // Handle file info without blob
-                const fileInfo = {
-                    name: data.fileName,
-                    type: data.fileType,
-                    size: data.fileSize,
-                    id: data.fileId,
-                    sharedBy: data.originalSender
-                };
-                // Add to history if not already present
-                if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-                    addFileToHistory(fileInfo, 'received');
-                    
-                    // If this is the host, forward to other peers
-                    if (connections.size > 1) {
-                        await forwardFileInfoToPeers(fileInfo, data.fileId);
-                    }
+            } else if (data.type === 'file-update') {
+                // Handle file update notification
+                console.log('Received file update:', data.fileInfo);
+                const fileId = data.fileInfo.id;
+                if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
+                    addFileToHistory(data.fileInfo, 'received');
                 }
             } else if (data.type === 'file-header') {
                 await handleFileHeader(data);
@@ -356,16 +342,6 @@ function setupConnectionHandlers(conn) {
                 await handleFileChunk(data);
             } else if (data.type === 'file-complete') {
                 await handleFileComplete(data);
-            } else if (data.type === 'blob-request') {
-                // Handle direct blob request
-                await handleBlobRequest(data, conn);
-            } else if (data.type === 'blob-request-forwarded') {
-                // Handle forwarded blob request (host only)
-                await handleForwardedBlobRequest(data, conn);
-            } else if (data.type === 'blob-error') {
-                showNotification(`Failed to download file: ${data.error}`, 'error');
-                elements.transferProgress.classList.add('hidden');
-                updateTransferInfo('');
             }
         } catch (error) {
             console.error('Data handling error:', error);
@@ -453,18 +429,12 @@ async function handleFileComplete(data) {
     if (!fileData) return;
 
     try {
-        // Combine chunks into blob if this is a blob transfer
-        if (fileData.chunks.length > 0) {
-            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-            
-            // Verify file size
-            if (blob.size !== fileData.fileSize) {
-                throw new Error('Received file size does not match expected size');
-            }
-
-            // Create download URL and trigger download
-            downloadBlob(blob, fileData.fileName);
-            showNotification(`Downloaded ${fileData.fileName}`, 'success');
+        // Combine chunks into blob
+        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+        
+        // Verify file size
+        if (blob.size !== fileData.fileSize) {
+            throw new Error('Received file size does not match expected size');
         }
 
         // Create file info object
@@ -473,23 +443,26 @@ async function handleFileComplete(data) {
             type: fileData.fileType,
             size: fileData.fileSize,
             id: data.fileId,
+            blob: blob,
             sharedBy: fileData.originalSender
         };
 
-        // Add to history if this is a new file info
-        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-            addFileToHistory(fileInfo, 'received');
+        console.log('File received successfully:', fileInfo);
 
-            // If this is the host peer, forward the file info to other connected peers
-            if (connections.size > 1) {
-                console.log('Forwarding file info to other peers as host');
-                await forwardFileInfoToPeers(fileInfo, data.fileId);
-            }
+        // Add to history
+        addFileToHistory(fileInfo, 'received');
+
+        // If this is the host peer (the first to create the connection),
+        // forward the file to other connected peers
+        if (peer.id !== fileInfo.sharedBy && connections.size > 1) {
+            console.log('Forwarding file to other peers as host');
+            await forwardFileToPeers(fileInfo, data.fileId);
         }
 
+        showNotification(`Received ${fileData.fileName}`, 'success');
     } catch (error) {
         console.error('Error handling file completion:', error);
-        showNotification('Error processing file: ' + error.message, 'error');
+        showNotification('Error processing received file: ' + error.message, 'error');
     } finally {
         delete fileChunks[data.fileId];
         elements.transferProgress.classList.add('hidden');
@@ -498,197 +471,75 @@ async function handleFileComplete(data) {
     }
 }
 
-// Forward file info to other connected peers
-async function forwardFileInfoToPeers(fileInfo, fileId) {
+// Forward file to other connected peers
+async function forwardFileToPeers(fileInfo, fileId) {
+    const forwardPromises = [];
+    
     for (const [peerId, conn] of connections) {
         // Don't send back to the original sender
         if (peerId !== fileInfo.sharedBy && conn && conn.open) {
-            conn.send({
-                type: 'file-info',
-                fileId: fileId,
-                fileName: fileInfo.name,
-                fileType: fileInfo.type,
-                fileSize: fileInfo.size,
-                originalSender: fileInfo.sharedBy
-            });
+            forwardPromises.push(forwardFileToPeer(fileInfo, conn, fileId));
+        }
+    }
+
+    if (forwardPromises.length > 0) {
+        try {
+            await Promise.all(forwardPromises);
+            console.log('File forwarded to all peers successfully');
+        } catch (error) {
+            console.error('Error forwarding file to some peers:', error);
         }
     }
 }
 
-// Send file to a specific peer
-async function sendFileToPeer(file, conn, fileId, fileBlob) {
+// Forward file to a specific peer
+async function forwardFileToPeer(fileInfo, conn, fileId) {
     try {
-        if (!conn.open) {
-            throw new Error('Connection is not open');
-        }
-
-        // Store the blob for later use
-        sentFileBlobs.set(fileId, fileBlob);
-
-        // Send file info only
-        conn.send({
-            type: 'file-info',
-            fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            originalSender: peer.id
-        });
-
-        console.log(`File info sent successfully to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error sending file info to peer ${conn.peer}:`, error);
-        throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
-    }
-}
-
-// Handle blob request
-async function handleBlobRequest(data, conn) {
-    const { fileId, forwardTo } = data;
-    console.log('Received blob request for file:', fileId);
-
-    // Check if we have the blob
-    const blob = sentFileBlobs.get(fileId);
-    if (!blob) {
-        console.error('Blob not found for file:', fileId);
-        conn.send({
-            type: 'blob-error',
-            fileId: fileId,
-            error: 'File not available'
-        });
-        return;
-    }
-
-    try {
-        // Convert blob to array buffer
-        const buffer = await blob.arrayBuffer();
-        let offset = 0;
-        let lastProgressUpdate = 0;
-
-        // If this is a forwarded request, send to the correct peer
-        const targetConn = forwardTo ? connections.get(forwardTo) : conn;
-        if (forwardTo && (!targetConn || !targetConn.open)) {
-            throw new Error('Requester no longer connected');
-        }
-
-        const sendToConn = targetConn || conn;
-
+        console.log(`Forwarding file to peer ${conn.peer}`);
+        
         // Send file header
-        sendToConn.send({
+        conn.send({
             type: 'file-header',
             fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            originalSender: peer.id
+            fileName: fileInfo.name,
+            fileType: fileInfo.type,
+            fileSize: fileInfo.size,
+            originalSender: fileInfo.sharedBy // Preserve original sender
         });
 
-        // Send chunks
-        while (offset < blob.size) {
-            if (!sendToConn.open) {
-                throw new Error('Connection lost during transfer');
-            }
+        // Convert blob to array buffer
+        const buffer = await fileInfo.blob.arrayBuffer();
+        let offset = 0;
+        const chunkSize = CHUNK_SIZE;
 
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            sendToConn.send({
+        while (offset < fileInfo.size) {
+            const chunk = buffer.slice(offset, offset + chunkSize);
+            conn.send({
                 type: 'file-chunk',
                 fileId: fileId,
                 data: chunk,
-                offset: offset
+                offset: offset,
+                originalSender: fileInfo.sharedBy
             });
 
             offset += chunk.byteLength;
-
-            // Update progress
-            const currentProgress = (offset / blob.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
-                lastProgressUpdate = currentProgress;
-            }
         }
 
         // Send completion message
-        sendToConn.send({
+        conn.send({
             type: 'file-complete',
             fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size
-        });
-
-        console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
-    } catch (error) {
-        console.error(`Error sending blob to peer:`, error);
-        conn.send({
-            type: 'blob-error',
-            fileId: fileId,
-            error: error.message
-        });
-    }
-}
-
-// Function to request and download a blob
-async function requestAndDownloadBlob(fileInfo) {
-    // Try to connect to original sender first
-    let conn = connections.get(fileInfo.sharedBy);
-    
-    // If no direct connection to original sender, request through host
-    if (!conn || !conn.open) {
-        // Find the host connection (first established connection)
-        const hostConn = Array.from(connections.values())[0];
-        if (!hostConn || !hostConn.open) {
-            throw new Error('No connection to host available');
-        }
-
-        // Request blob through host
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
-        updateTransferInfo(`Requesting ${fileInfo.name} through host...`);
-
-        hostConn.send({
-            type: 'blob-request-forwarded',
-            fileId: fileInfo.id,
             fileName: fileInfo.name,
-            originalSender: fileInfo.sharedBy,
-            requesterId: peer.id
+            fileType: fileInfo.type,
+            fileSize: fileInfo.size,
+            originalSender: fileInfo.sharedBy
         });
-        return;
+
+        console.log(`File forwarded successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error forwarding file to peer ${conn.peer}:`, error);
+        throw new Error(`Failed to forward to peer ${conn.peer}: ${error.message}`);
     }
-
-    // Direct connection available, request normally
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Requesting ${fileInfo.name}...`);
-
-    conn.send({
-        type: 'blob-request',
-        fileId: fileInfo.id,
-        fileName: fileInfo.name
-    });
-}
-
-// Handle forwarded blob request (host only)
-async function handleForwardedBlobRequest(data, fromConn) {
-    console.log('Handling forwarded blob request:', data);
-    
-    // Find connection to original sender
-    const originalSenderConn = connections.get(data.originalSender);
-    if (!originalSenderConn || !originalSenderConn.open) {
-        fromConn.send({
-            type: 'blob-error',
-            fileId: data.fileId,
-            error: 'Original sender not connected to host'
-        });
-        return;
-    }
-
-    // Request blob from original sender with forwarding info
-    originalSenderConn.send({
-        type: 'blob-request',
-        fileId: data.fileId,
-        fileName: data.fileName,
-        forwardTo: data.requesterId
-    });
 }
 
 // Update transfer info display
@@ -755,6 +606,77 @@ function broadcastFileUpdate(fileInfo) {
         if (conn.open) {
             conn.send(updateData);
         }
+    }
+}
+
+// Send file to a specific peer
+async function sendFileToPeer(file, conn, fileId, fileBlob) {
+    try {
+        if (!conn.open) {
+            throw new Error('Connection is not open');
+        }
+
+        // Send file header
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        });
+
+        // Convert blob to array buffer once
+        const buffer = await fileBlob.arrayBuffer();
+        let offset = 0;
+        let lastProgressUpdate = 0;
+        
+        while (offset < file.size) {
+            if (!conn.open) {
+                throw new Error('Connection lost during transfer');
+            }
+
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            conn.send({
+                type: 'file-chunk',
+                fileId: fileId,
+                data: chunk,
+                offset: offset,
+                originalSender: peer.id
+            });
+
+            offset += chunk.byteLength;
+            
+            // Update progress more smoothly (update every 1% change)
+            const currentProgress = (offset / file.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress);
+                lastProgressUpdate = currentProgress;
+            }
+        }
+
+        // Ensure final progress is shown
+        updateProgress(100);
+
+        // Verify connection is still open before sending completion
+        if (!conn.open) {
+            throw new Error('Connection lost before completion');
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id
+        });
+
+        console.log(`File sent successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error sending file to peer ${conn.peer}:`, error);
+        throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
     }
 }
 
@@ -1129,6 +1051,7 @@ function updateFilesList(listElement, fileInfo, type) {
 
     const sharedBySpan = document.createElement('span');
     sharedBySpan.className = 'shared-by';
+    // Use sentence case for shared by text
     sharedBySpan.textContent = type === 'sent' ? 
         'Sent to connected peers' : 
         `Received from peer ${fileInfo.sharedBy || 'Unknown'}`;
@@ -1139,21 +1062,22 @@ function updateFilesList(listElement, fileInfo, type) {
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';
-    downloadBtn.title = 'Download file';
+    downloadBtn.title = 'Download file';  // Add tooltip in sentence case
     downloadBtn.innerHTML = '<span class="material-icons">download</span>';
-    downloadBtn.onclick = async () => {
-        try {
-            if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
-                // For sent files, we have the blob locally
-                const blob = sentFileBlobs.get(fileInfo.id);
-                downloadBlob(blob, fileInfo.name);
-            } else {
-                // For received files, request the blob from the original sender
-                await requestAndDownloadBlob(fileInfo);
-            }
-        } catch (error) {
-            console.error('Error downloading file:', error);
-            showNotification('Failed to download file: ' + error.message, 'error');
+    downloadBtn.onclick = () => {
+        if (fileInfo.blob) {
+            console.log('Downloading file:', fileInfo);
+            const url = URL.createObjectURL(fileInfo.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileInfo.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        } else {
+            console.error('No blob available for file:', fileInfo);
+            showNotification('File is not available for download', 'error');  // Updated error message to sentence case
         }
     };
     
@@ -1323,18 +1247,6 @@ function reconnectToPeer(peerId) {
         console.error(`Failed to reconnect to peer ${peerId}:`, error);
         connections.delete(peerId);
     }
-}
-
-// Function to download a blob
-function downloadBlob(blob, fileName) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 init();

@@ -316,72 +316,102 @@ input[type="file"] {
     margin-bottom: 2rem;
 }
 
-.files-list {
+.file-list {
     list-style: none;
+    padding: 0;
+    margin: 0;
 }
 
-.files-list li {
+.file-item {
     display: flex;
     align-items: center;
-    padding: 12px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    background: #fff;
     border-radius: 8px;
-    margin-bottom: 8px;
-    background: var(--background-color);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     transition: all 0.3s ease;
-    position: relative;
-    overflow: hidden;
 }
 
-.files-list li.downloaded {
-    background: rgba(76, 175, 80, 0.1);
-}
-
-.files-list li .material-icons {
-    margin-right: 12px;
-    color: var(--text-color);
-}
-
-.file-info {
-    flex: 1;
-    min-width: 0;
+.file-item.downloaded {
+    background: #e8f5e9;
 }
 
 .file-name {
+    flex: 1;
+    margin-right: 16px;
     font-weight: 500;
-    font-size: 1rem;
-    color: var(--text-color);
-    word-break: break-all;
-    margin-bottom: 2px;
+    color: #333;
 }
 
 .file-size {
-    font-size: 0.85rem;
+    margin-right: 16px;
     color: #666;
-    margin-bottom: 2px;
+    font-size: 0.9em;
 }
 
-.shared-by {
-    font-size: 0.85rem;
-    color: #666;
-    font-style: italic;
+.file-actions {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.download-button {
-    background: none;
-    border: none;
+.download-icon,
+.progress-indicator,
+.open-file-icon {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+
+.download-icon svg,
+.open-file-icon svg {
+    width: 24px;
+    height: 24px;
+    color: #2196F3;
     cursor: pointer;
-    padding: 8px;
-    border-radius: 4px;
-    color: var(--primary-color);
-    transition: background-color 0.2s;
 }
 
-.download-button:hover {
-    background-color: rgba(33, 150, 243, 0.1);
+.open-file-icon svg {
+    color: #4CAF50;
 }
 
-.download-button .material-icons {
-    font-size: 20px;
+.progress-indicator {
+    position: relative;
+}
+
+.progress-indicator svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.progress-indicator circle {
+    fill: none;
+    stroke-width: 3;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.3s ease;
+}
+
+.progress-indicator circle.progress-bg {
+    stroke: #e0e0e0;
+}
+
+.progress-indicator circle.progress-bar {
+    stroke: #2196F3;
+    stroke-dasharray: 125.6;  /* 2 * PI * 20 (radius) */
 }
 
 /* Files sections */
@@ -594,7 +624,7 @@ input[type="file"] {
         padding: 20px;
     }
 
-    .files-list li {
+    .file-list li {
         flex-direction: column;
         text-align: center;
     }

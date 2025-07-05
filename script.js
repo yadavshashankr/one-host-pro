@@ -437,36 +437,44 @@ function setupConnection(conn) {
 
 // Create file list item
 function createFileListItem(fileInfo) {
-    const fileId = fileInfo.id;
     const li = document.createElement('li');
     li.className = 'file-item';
-    li.setAttribute('data-file-id', fileId);
+    li.setAttribute('data-file-id', fileInfo.id);
     
     li.innerHTML = `
         <span class="file-name">${fileInfo.name}</span>
         <span class="file-size">${formatFileSize(fileInfo.size)}</span>
-        <div class="download-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
-            </svg>
-        </div>
-        <div class="progress-circle" style="display: none;">
-            <svg viewBox="0 0 40 40">
-                <circle cx="20" cy="20" r="18" fill="none" stroke="#ddd" stroke-width="4"></circle>
-                <circle cx="20" cy="20" r="18" fill="none" stroke="#2196F3" stroke-width="4" 
-                        style="stroke-dasharray: ${2 * Math.PI * 18}; stroke-dashoffset: ${2 * Math.PI * 18};"></circle>
-            </svg>
-        </div>
-        <div class="check-icon" style="display: none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M20 6L9 17l-5-5"></path>
-            </svg>
+        <div class="file-actions">
+            <div class="download-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+                </svg>
+            </div>
+            <div class="progress-indicator" style="display: none;">
+                <svg viewBox="0 0 50 50">
+                    <circle class="progress-bg" cx="25" cy="25" r="20" />
+                    <circle class="progress-bar" cx="25" cy="25" r="20" />
+                </svg>
+            </div>
+            <div class="open-file-icon" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"></path>
+                </svg>
+            </div>
         </div>
     `;
 
-    // Add click handler for download
+    // Add click handlers
     const downloadIcon = li.querySelector('.download-icon');
-    downloadIcon.addEventListener('click', () => handleFileDownload(fileId));
+    const openFileIcon = li.querySelector('.open-file-icon');
+
+    downloadIcon.addEventListener('click', () => {
+        handleFileDownload(fileInfo.id);
+    });
+
+    openFileIcon.addEventListener('click', () => {
+        handleFileOpen(fileInfo);
+    });
 
     return li;
 }
@@ -1689,6 +1697,56 @@ function handleDownloadError(data) {
     
     // Show error to user
     alert(`Download failed: ${error}`);
+}
+
+// Update progress for a specific file
+function updateFileProgress(fileId, progress) {
+    const fileItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (!fileItem) return;
+
+    const downloadIcon = fileItem.querySelector('.download-icon');
+    const progressIndicator = fileItem.querySelector('.progress-indicator');
+    const progressBar = progressIndicator.querySelector('.progress-bar');
+    const circumference = 2 * Math.PI * 20; // radius is 20
+
+    // Show progress indicator, hide download icon
+    downloadIcon.style.display = 'none';
+    progressIndicator.style.display = 'flex';
+
+    // Update progress bar
+    const offset = circumference - (progress / 100) * circumference;
+    progressBar.style.strokeDasharray = `${circumference} ${circumference}`;
+    progressBar.style.strokeDashoffset = offset;
+}
+
+// Handle file download completion
+function handleFileDownloadComplete(fileId) {
+    const fileItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (!fileItem) return;
+
+    // Update UI elements
+    const progressIndicator = fileItem.querySelector('.progress-indicator');
+    const openFileIcon = fileItem.querySelector('.open-file-icon');
+    
+    // Hide progress indicator, show open icon
+    progressIndicator.style.display = 'none';
+    openFileIcon.style.display = 'flex';
+    
+    // Add downloaded class for background change
+    fileItem.classList.add('downloaded');
+}
+
+// Handle file open
+function handleFileOpen(fileInfo) {
+    // Create object URL for the downloaded file
+    const blob = receivedFiles.get(fileInfo.id);
+    if (!blob) return;
+
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    
+    // Clean up the URL after a delay
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 init();

@@ -341,7 +341,15 @@ function setupConnectionHandlers(conn) {
                     id: data.fileId,
                     sharedBy: data.originalSender
                 };
-                addFileToHistory(fileInfo, 'received');
+                // Add to history if not already present
+                if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+                    addFileToHistory(fileInfo, 'received');
+                    
+                    // If this is the host, forward to other peers
+                    if (connections.size > 1) {
+                        await forwardFileInfoToPeers(fileInfo, data.fileId);
+                    }
+                }
             } else if (data.type === 'file-header') {
                 await handleFileHeader(data);
             } else if (data.type === 'file-chunk') {
@@ -357,6 +365,7 @@ function setupConnectionHandlers(conn) {
             } else if (data.type === 'blob-error') {
                 showNotification(`Failed to download file: ${data.error}`, 'error');
                 elements.transferProgress.classList.add('hidden');
+                updateTransferInfo('');
             }
         } catch (error) {
             console.error('Data handling error:', error);
@@ -444,7 +453,21 @@ async function handleFileComplete(data) {
     if (!fileData) return;
 
     try {
-        // Create file info object without blob
+        // Combine chunks into blob if this is a blob transfer
+        if (fileData.chunks.length > 0) {
+            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+            
+            // Verify file size
+            if (blob.size !== fileData.fileSize) {
+                throw new Error('Received file size does not match expected size');
+            }
+
+            // Create download URL and trigger download
+            downloadBlob(blob, fileData.fileName);
+            showNotification(`Downloaded ${fileData.fileName}`, 'success');
+        }
+
+        // Create file info object
         const fileInfo = {
             name: fileData.fileName,
             type: fileData.fileType,
@@ -453,22 +476,20 @@ async function handleFileComplete(data) {
             sharedBy: fileData.originalSender
         };
 
-        console.log('File info received successfully:', fileInfo);
+        // Add to history if this is a new file info
+        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+            addFileToHistory(fileInfo, 'received');
 
-        // Add to history
-        addFileToHistory(fileInfo, 'received');
-
-        // If this is the host peer (the first to create the connection),
-        // forward the file info to other connected peers
-        if (peer.id !== fileInfo.sharedBy && connections.size > 1) {
-            console.log('Forwarding file info to other peers as host');
-            await forwardFileInfoToPeers(fileInfo, data.fileId);
+            // If this is the host peer, forward the file info to other connected peers
+            if (connections.size > 1) {
+                console.log('Forwarding file info to other peers as host');
+                await forwardFileInfoToPeers(fileInfo, data.fileId);
+            }
         }
 
-        showNotification(`File info received for ${fileData.fileName}`, 'success');
     } catch (error) {
         console.error('Error handling file completion:', error);
-        showNotification('Error processing received file info: ' + error.message, 'error');
+        showNotification('Error processing file: ' + error.message, 'error');
     } finally {
         delete fileChunks[data.fileId];
         elements.transferProgress.classList.add('hidden');
@@ -521,40 +542,89 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Function to request and download a blob
-async function requestAndDownloadBlob(fileInfo) {
-    // Try to connect to original sender first
-    let conn = connections.get(fileInfo.sharedBy);
-    
-    // If no direct connection to original sender, request through host
-    if (!conn || !conn.open) {
-        // Find the host connection (first established connection)
-        const hostConn = Array.from(connections.values())[0];
-        if (!hostConn || !hostConn.open) {
-            throw new Error('No connection to host available');
-        }
+// Handle blob request
+async function handleBlobRequest(data, conn) {
+    const { fileId, forwardTo } = data;
+    console.log('Received blob request for file:', fileId);
 
-        // Request blob through host
-        hostConn.send({
-            type: 'blob-request-forwarded',
-            fileId: fileInfo.id,
-            fileName: fileInfo.name,
-            originalSender: fileInfo.sharedBy,
-            requesterId: peer.id
+    // Check if we have the blob
+    const blob = sentFileBlobs.get(fileId);
+    if (!blob) {
+        console.error('Blob not found for file:', fileId);
+        conn.send({
+            type: 'blob-error',
+            fileId: fileId,
+            error: 'File not available'
         });
         return;
     }
 
-    // Direct connection available, request normally
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Requesting ${fileInfo.name}...`);
+    try {
+        // Convert blob to array buffer
+        const buffer = await blob.arrayBuffer();
+        let offset = 0;
+        let lastProgressUpdate = 0;
 
-    conn.send({
-        type: 'blob-request',
-        fileId: fileInfo.id,
-        fileName: fileInfo.name
-    });
+        // If this is a forwarded request, send to the correct peer
+        const targetConn = forwardTo ? connections.get(forwardTo) : conn;
+        if (forwardTo && (!targetConn || !targetConn.open)) {
+            throw new Error('Requester no longer connected');
+        }
+
+        const sendToConn = targetConn || conn;
+
+        // Send file header
+        sendToConn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: data.fileName,
+            fileType: blob.type,
+            fileSize: blob.size,
+            originalSender: peer.id
+        });
+
+        // Send chunks
+        while (offset < blob.size) {
+            if (!sendToConn.open) {
+                throw new Error('Connection lost during transfer');
+            }
+
+            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            sendToConn.send({
+                type: 'file-chunk',
+                fileId: fileId,
+                data: chunk,
+                offset: offset
+            });
+
+            offset += chunk.byteLength;
+
+            // Update progress
+            const currentProgress = (offset / blob.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress);
+                lastProgressUpdate = currentProgress;
+            }
+        }
+
+        // Send completion message
+        sendToConn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: data.fileName,
+            fileType: blob.type,
+            fileSize: blob.size
+        });
+
+        console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
+    } catch (error) {
+        console.error(`Error sending blob to peer:`, error);
+        conn.send({
+            type: 'blob-error',
+            fileId: fileId,
+            error: error.message
+        });
+    }
 }
 
 // Handle forwarded blob request (host only)
@@ -572,12 +642,12 @@ async function handleForwardedBlobRequest(data, fromConn) {
         return;
     }
 
-    // Request blob from original sender
+    // Request blob from original sender with forwarding info
     originalSenderConn.send({
         type: 'blob-request',
         fileId: data.fileId,
         fileName: data.fileName,
-        forwardTo: data.requesterId // Add forwarding info
+        forwardTo: data.requesterId
     });
 }
 

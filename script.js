@@ -627,6 +627,46 @@ async function handleBlobRequest(data, conn) {
     }
 }
 
+// Function to request and download a blob
+async function requestAndDownloadBlob(fileInfo) {
+    // Try to connect to original sender first
+    let conn = connections.get(fileInfo.sharedBy);
+    
+    // If no direct connection to original sender, request through host
+    if (!conn || !conn.open) {
+        // Find the host connection (first established connection)
+        const hostConn = Array.from(connections.values())[0];
+        if (!hostConn || !hostConn.open) {
+            throw new Error('No connection to host available');
+        }
+
+        // Request blob through host
+        elements.transferProgress.classList.remove('hidden');
+        updateProgress(0);
+        updateTransferInfo(`Requesting ${fileInfo.name} through host...`);
+
+        hostConn.send({
+            type: 'blob-request-forwarded',
+            fileId: fileInfo.id,
+            fileName: fileInfo.name,
+            originalSender: fileInfo.sharedBy,
+            requesterId: peer.id
+        });
+        return;
+    }
+
+    // Direct connection available, request normally
+    elements.transferProgress.classList.remove('hidden');
+    updateProgress(0);
+    updateTransferInfo(`Requesting ${fileInfo.name}...`);
+
+    conn.send({
+        type: 'blob-request',
+        fileId: fileInfo.id,
+        fileName: fileInfo.name
+    });
+}
+
 // Handle forwarded blob request (host only)
 async function handleForwardedBlobRequest(data, fromConn) {
     console.log('Handling forwarded blob request:', data);

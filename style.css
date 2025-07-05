@@ -471,26 +471,93 @@ input[type="file"] {
 }
 
 .notification {
-    background: var(--card-background);
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    z-index: 1000;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.notification.fade-out {
+    opacity: 0;
+}
+
+.notification-success {
+    background-color: #4caf50;
+}
+
+.notification-error {
+    background-color: #f44336;
+}
+
+.notification-warning {
+    background-color: #ff9800;
+}
+
+.notification-info {
+    background-color: #2196f3;
+}
+
+#status {
+    padding: 8px 16px;
     border-radius: 4px;
-    padding: 10px 20px;
-    margin-bottom: 10px;
-    box-shadow: 0 2px 4px var(--shadow-color);
-    animation: slideIn 0.3s ease-out;
-    max-width: 300px;
+    font-size: 14px;
+    margin-bottom: 20px;
+    text-align: center;
 }
 
-.notification.error {
-    border-left: 4px solid var(--error-color);
+.status-ready {
+    background-color: #e3f2fd;
+    color: #1976d2;
 }
 
-.notification.success {
-    border-left: 4px solid var(--success-color);
+.status-connecting {
+    background-color: #fff3e0;
+    color: #f57c00;
 }
 
-@keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+.status-connected {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+.status-error {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.status-disconnected {
+    background-color: #fafafa;
+    color: #616161;
+}
+
+.connect-section {
+    margin: 20px 0;
+    padding: 20px;
+    border-radius: 8px;
+    background-color: #f5f5f5;
+    transition: all 0.3s ease;
+}
+
+.connect-section.connected {
+    background-color: #e8f5e9;
+    border: 1px solid #a5d6a7;
+}
+
+.file-transfer {
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.file-transfer.hidden {
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* Mobile responsive styles */

@@ -916,14 +916,18 @@ function formatFileSize(bytes) {
 
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
+    notification.className = `notification notification-${type}`;
+    notification.textContent = message;
     
-    elements.notifications.appendChild(notification);
+    document.body.appendChild(notification);
     
+    // Remove notification after 3 seconds
     setTimeout(() => {
-        notification.remove();
-    }, 5000);
+        notification.classList.add('fade-out');
+        setTimeout(() => {
+            document.body.removeChild(notification);
+        }, 300);
+    }, 3000);
 }
 
 function resetConnection() {

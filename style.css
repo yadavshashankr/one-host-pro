@@ -300,7 +300,7 @@ input[type="file"] {
     margin-bottom: 2rem;
 }
 
-/* Enhanced file list styles */
+/* File list styles */
 .files-list {
     list-style: none;
     margin: 0;
@@ -308,7 +308,7 @@ input[type="file"] {
 }
 
 .files-list li {
-    background: white;
+    background: var(--card-background);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     margin-bottom: 12px;
@@ -374,6 +374,7 @@ input[type="file"] {
     height: 3px;
     background: var(--primary-color);
     transition: width 0.3s ease;
+    width: 0;
 }
 
 .download-button {
@@ -387,16 +388,20 @@ input[type="file"] {
     align-items: center;
     gap: 6px;
     font-size: 0.9rem;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease;
+    min-width: 100px;
+    justify-content: center;
 }
 
 .download-button:hover {
     background: var(--hover-color);
+    transform: translateY(-1px);
 }
 
 .download-button:disabled {
     background: #ccc;
     cursor: not-allowed;
+    transform: none;
 }
 
 .download-button .material-icons {
@@ -408,20 +413,29 @@ input[type="file"] {
     color: var(--success-color) !important;
 }
 
-/* Files sections */
+/* Ensure the file list container is visible */
+#file-list {
+    margin-top: 20px;
+    padding: 10px;
+}
+
+#received-files {
+    margin-top: 20px;
+}
+
+/* Add some spacing between sections */
 .files-section {
+    margin-bottom: 30px;
     background: var(--card-background);
     border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    box-shadow: 0 2px 4px var(--shadow-color);
 }
 
 .files-section h3 {
-    margin: 0 0 16px 0;
+    margin-bottom: 15px;
     color: var(--text-color);
-    font-size: 1.1rem;
-    font-weight: 500;
+    font-size: 1.2rem;
 }
 
 /* Recent peers dropdown */

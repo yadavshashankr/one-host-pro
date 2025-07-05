@@ -442,11 +442,19 @@ async function handleFileChunk(data) {
     fileData.chunks.push(data.data);
     fileData.receivedSize += data.data.byteLength;
     
-    // Update progress more smoothly (update every 1% change)
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress);
-        fileData.lastProgressUpdate = currentProgress;
+    // Calculate and update progress
+    const progress = (fileData.receivedSize / fileData.fileSize) * 100;
+    
+    // Update global progress bar
+    updateProgress(progress);
+    
+    // Update file-specific progress bar if exists
+    const fileItem = elements.fileList.querySelector(`[data-file-id="${data.fileId}"]`);
+    if (fileItem) {
+        const progressBar = fileItem.querySelector('.download-progress');
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+        }
     }
 }
 
@@ -869,7 +877,7 @@ function updateProgress(percent) {
     }
 }
 
-// Update the addFileToList function to include download status
+// Update the addFileToList function to handle both direct blob downloads and P2P transfers
 function addFileToList(name, url, size, isDownloaded = false) {
     const li = document.createElement('li');
     const icon = document.createElement('span');
@@ -922,46 +930,40 @@ function addFileToList(name, url, size, isDownloaded = false) {
                 fileStatus.textContent = 'Downloading...';
                 fileStatus.classList.add('downloading');
                 
-                const response = await fetch(url);
-                const contentLength = response.headers.get('content-length');
-                const total = parseInt(contentLength, 10);
-                let loaded = 0;
-
-                const reader = response.body.getReader();
-                const chunks = [];
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+                if (url instanceof Blob || url.startsWith('blob:')) {
+                    // Handle direct blob download
+                    if (url instanceof Blob) {
+                        downloadBlob(url, name);
+                    } else {
+                        const response = await fetch(url);
+                        const blob = await response.blob();
+                        downloadBlob(blob, name);
+                    }
                     
-                    chunks.push(value);
-                    loaded += value.length;
+                    // Update UI to show downloaded state
+                    downloadButton.innerHTML = '';
+                    const downloadedIcon = document.createElement('span');
+                    downloadedIcon.className = 'material-icons file-downloaded-icon';
+                    downloadedIcon.textContent = 'check_circle';
+                    downloadButton.appendChild(downloadedIcon);
+                    downloadButton.disabled = true;
                     
-                    // Update progress
-                    const progress = (loaded / total) * 100;
-                    downloadProgress.style.width = `${progress}%`;
+                    fileStatus.innerHTML = '';
+                    fileStatus.appendChild(downloadedIcon.cloneNode(true));
+                    fileStatus.appendChild(document.createTextNode('Downloaded'));
+                    fileStatus.classList.remove('downloading');
+                    fileStatus.classList.add('downloaded');
+                } else {
+                    // Handle P2P file transfer
+                    await requestAndDownloadBlob({
+                        name: name,
+                        size: size,
+                        type: 'application/octet-stream',
+                        id: url // Using url as fileId for P2P transfers
+                    });
                 }
-
-                const blob = new Blob(chunks);
-                downloadBlob(blob, name);
+                
                 downloadedFiles.add(name);
-                
-                // Update UI to show downloaded state
-                downloadButton.innerHTML = '';
-                const downloadedIcon = document.createElement('span');
-                downloadedIcon.className = 'material-icons file-downloaded-icon';
-                downloadedIcon.textContent = 'check_circle';
-                downloadButton.appendChild(downloadedIcon);
-                downloadButton.disabled = true;
-                
-                fileStatus.innerHTML = '';
-                fileStatus.appendChild(downloadedIcon.cloneNode(true));
-                fileStatus.appendChild(document.createTextNode('Downloaded'));
-                fileStatus.classList.remove('downloading');
-                fileStatus.classList.add('downloaded');
-                
-                // Hide progress bar
-                downloadProgress.style.width = '0%';
                 
             } catch (error) {
                 console.error('Download failed:', error);

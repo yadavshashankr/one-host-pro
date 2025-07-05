@@ -34,8 +34,9 @@ const elements = {
 };
 
 // State
-let peer = null;
-let connections = new Map(); // Map to store multiple connections
+let peer;
+let peerId;
+const connections = new Map();
 let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
@@ -225,99 +226,197 @@ async function shareId() {
 
 // Initialize PeerJS
 function initPeerJS() {
+    // Create Peer object with public PeerJS server
+    peer = new Peer(null, {
+        host: '0.peerjs.com',  // Using the public PeerJS server
+        secure: true,
+        port: 443,
+        debug: 2,
+        config: {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ]
+        }
+    });
+
+    // Handle peer events
+    peer.on('open', (id) => {
+        peerId = id;
+        updateConnectionStatus('', `Your ID: ${id}`);
+        console.log('My peer ID is:', id);
+        generateQRCode(id);
+        initShareButton(); // Initialize share button after getting peer ID
+    });
+
+    peer.on('error', (error) => {
+        console.error('Peer Error:', error);
+        handlePeerError(error);
+    });
+
+    peer.on('disconnected', () => {
+        console.log('Peer disconnected');
+        updateConnectionStatus('', 'Disconnected from server');
+        showNotification('Disconnected from server', 'warning');
+        
+        // Try to reconnect
+        setTimeout(() => {
+            if (!peer.destroyed) {
+                console.log('Attempting to reconnect...');
+                peer.reconnect();
+            }
+        }, 3000);
+    });
+
+    peer.on('connection', (conn) => {
+        console.log('Incoming connection from:', conn.peer);
+        setupConnection(conn);
+    });
+}
+
+// Handle peer errors
+function handlePeerError(error) {
+    console.error('Peer Error:', error);
+    let errorMessage = 'Connection error occurred';
+
+    if (error.type === 'peer-unavailable') {
+        errorMessage = 'Peer is not available or ID is invalid';
+    } else if (error.type === 'network') {
+        errorMessage = 'Network connection error';
+    } else if (error.type === 'server-error') {
+        errorMessage = 'Could not connect to the server';
+    } else if (error.type === 'disconnected') {
+        errorMessage = 'Disconnected from server';
+    }
+
+    updateConnectionStatus('', errorMessage);
+    showNotification(errorMessage, 'error');
+}
+
+// Connect to a remote peer
+async function connectToPeer(remotePeerId) {
+    if (!peer || peer.destroyed) {
+        console.log('Peer not initialized, reinitializing...');
+        initPeerJS();
+        // Wait for peer to be ready
+        await new Promise((resolve) => {
+            const checkPeer = setInterval(() => {
+                if (peer && !peer.destroyed && peer.open) {
+                    clearInterval(checkPeer);
+                    resolve();
+                }
+            }, 100);
+        });
+    }
+
     try {
-        peer = new Peer({
-            debug: 2,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
-                ]
+        if (remotePeerId === peerId) {
+            showNotification("Cannot connect to yourself", "error");
+            return;
+        }
+
+        if (connections.has(remotePeerId)) {
+            showNotification("Already connected to this peer", "warning");
+            return;
+        }
+
+        updateConnectionStatus('connecting', 'Connecting...');
+        console.log('Connecting to peer:', remotePeerId);
+
+        const conn = peer.connect(remotePeerId, {
+            reliable: true,
+            serialization: 'json',
+            metadata: {
+                peerId: peer.id,
+                timestamp: Date.now()
             }
         });
 
-        peer.on('open', (id) => {
-            elements.peerId.textContent = id;
-            updateConnectionStatus('', 'Ready to connect');
-            generateQRCode(id);
-            initShareButton(); // Initialize share button after getting peer ID
-        });
+        // Add connection timeout
+        const connectionTimeout = setTimeout(() => {
+            if (!conn.open) {
+                conn.close();
+                updateConnectionStatus('error', 'Connection timeout');
+                showNotification('Failed to establish connection (timeout)', 'error');
+            }
+        }, 15000); // 15 second timeout
 
-        peer.on('connection', (conn) => {
-            console.log('Incoming connection from:', conn.peer);
+        conn.on('open', () => {
+            clearTimeout(connectionTimeout);
             setupConnection(conn);
         });
 
-        peer.on('error', (error) => {
-            console.error('PeerJS Error:', error);
-            let errorMessage = 'Connection error';
-            
-            // Handle specific error types
-            if (error.type === 'peer-unavailable') {
-                errorMessage = 'Peer is not available or does not exist';
-            } else if (error.type === 'network') {
-                errorMessage = 'Network connection error';
-            } else if (error.type === 'disconnected') {
-                errorMessage = 'Disconnected from server';
-            } else if (error.type === 'server-error') {
-                errorMessage = 'Server error occurred';
-            }
-            
-            updateConnectionStatus('', errorMessage);
-            showNotification(errorMessage, 'error');
-            resetConnection();
+        conn.on('error', (err) => {
+            clearTimeout(connectionTimeout);
+            console.error('Connection error:', err);
+            updateConnectionStatus('error', 'Connection failed');
+            showNotification('Failed to establish connection', 'error');
         });
 
-        peer.on('disconnected', () => {
-            console.log('Peer disconnected');
-            updateConnectionStatus('', 'Disconnected');
-            isConnectionReady = false;
-            
-            // Try to reconnect
-            setTimeout(() => {
-                if (peer && peer.disconnected) {
-                    console.log('Attempting to reconnect...');
-                    peer.reconnect();
-                }
-            }, 3000);
-        });
     } catch (error) {
-        console.error('PeerJS Initialization Error:', error);
-        updateConnectionStatus('', 'Initialization failed');
-        showNotification('Failed to initialize peer connection', 'error');
+        console.error('Connection attempt error:', error);
+        updateConnectionStatus('error', 'Connection failed');
+        showNotification('Failed to establish connection', 'error');
     }
 }
 
-// Setup connection event handlers
+// Setup connection
 function setupConnection(conn) {
-    connections.set(conn.peer, conn);
-    
+    // Wait for connection to be ready
+    conn.on('open', () => {
+        console.log('Connection opened with:', conn.peer);
+        connections.set(conn.peer, conn);
+        updateConnectionStatus();
+        showNotification(`Connected to peer: ${conn.peer}`, 'success');
+        
+        // Show file transfer section
+        document.querySelector('.file-transfer').classList.remove('hidden');
+
+        // Send initial handshake
+        conn.send({
+            type: 'handshake',
+            peerId: peer.id,
+            timestamp: Date.now()
+        });
+    });
+
     conn.on('data', async (data) => {
         console.log('Received data type:', data.type);
         
-        switch (data.type) {
-            case 'file-info':
-                handleFileInfo(data);
-                break;
-            case 'blob-request':
-                handleBlobRequest(data, conn);
-                break;
-            case 'file-header':
-                // Reset progress tracking for new file
-                if (receivedChunks.has(data.fileId)) {
-                    receivedChunks.delete(data.fileId);
-                    receivedSizes.delete(data.fileId);
-                }
-                break;
-            case 'file-chunk':
-                handleFileChunk(data);
-                break;
-            case 'file-complete':
-                handleFileComplete(data);
-                break;
-            case 'blob-error':
-                handleDownloadError(data);
-                break;
+        try {
+            switch (data.type) {
+                case 'handshake':
+                    console.log('Handshake received from:', data.peerId);
+                    break;
+                case 'file-info':
+                    handleFileInfo(data);
+                    break;
+                case 'blob-request':
+                    handleBlobRequest(data, conn);
+                    break;
+                case 'file-header':
+                    // Reset progress tracking for new file
+                    if (receivedChunks.has(data.fileId)) {
+                        receivedChunks.delete(data.fileId);
+                        receivedSizes.delete(data.fileId);
+                    }
+                    break;
+                case 'file-chunk':
+                    handleFileChunk(data);
+                    break;
+                case 'file-complete':
+                    handleFileComplete(data);
+                    break;
+                case 'blob-error':
+                    handleDownloadError(data);
+                    break;
+            }
+        } catch (error) {
+            console.error('Error handling data:', error);
+            showNotification('Error processing received data', 'error');
         }
     });
 
@@ -325,15 +424,15 @@ function setupConnection(conn) {
         console.log('Connection closed with peer:', conn.peer);
         connections.delete(conn.peer);
         updateConnectionStatus();
+        showNotification(`Disconnected from peer: ${conn.peer}`, 'warning');
     });
 
     conn.on('error', (err) => {
         console.error('Connection error:', err);
         connections.delete(conn.peer);
         updateConnectionStatus();
+        showNotification(`Connection error with peer: ${conn.peer}`, 'error');
     });
-
-    updateConnectionStatus();
 }
 
 // Create file list item

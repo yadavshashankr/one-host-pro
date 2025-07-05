@@ -120,16 +120,27 @@ h3 {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease;
+    position: relative;
+    width: 36px;
+    height: 36px;
 }
 
 .icon-button:hover {
-    background-color: var(--border-color);
+    background-color: rgba(33, 150, 243, 0.1);
 }
 
 .icon-button .material-icons {
     font-size: 20px;
-    color: var(--text-color);
+    color: var(--primary-color);
+}
+
+.icon-button.downloaded {
+    background-color: var(--success-color);
+}
+
+.icon-button.downloaded .material-icons {
+    color: white;
 }
 
 /* QR Code styles */
@@ -237,6 +248,11 @@ input[type="text"]:focus {
     box-shadow: 0 2px 4px var(--shadow-color);
 }
 
+/* Hide the main transfer progress bar but keep it in the DOM */
+#transfer-progress {
+    display: none !important;
+}
+
 .drop-zone {
     border: 2px dashed var(--border-color);
     border-radius: 8px;
@@ -307,28 +323,26 @@ input[type="file"] {
 .files-list li {
     display: flex;
     align-items: center;
-    gap: 12px;
     padding: 12px;
-    background: var(--background-color);
     border-radius: 8px;
     margin-bottom: 8px;
-    transition: background-color 0.2s;
+    background: var(--background-color);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
 }
 
-.files-list li:hover {
-    background-color: #f0f0f0;
+.files-list li.downloaded {
+    background: rgba(76, 175, 80, 0.1);
 }
 
-.files-list .material-icons {
-    color: var(--primary-color);
-    font-size: 24px;
+.files-list li .material-icons {
+    margin-right: 12px;
+    color: var(--text-color);
 }
 
 .file-info {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
     min-width: 0;
 }
 
@@ -521,4 +535,38 @@ input[type="file"] {
     .download-button {
         margin-top: 10px;
     }
+}
+
+/* Circular progress indicator */
+.download-progress {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    margin-left: 8px;
+    display: none;
+}
+
+.download-progress.active {
+    display: block;
+}
+
+.download-progress svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.download-progress circle {
+    fill: none;
+    stroke-width: 3;
+    stroke-linecap: round;
+}
+
+.download-progress .progress-bg {
+    stroke: var(--border-color);
+}
+
+.download-progress .progress-bar {
+    stroke: var(--primary-color);
+    transition: stroke-dashoffset 0.1s ease;
 }

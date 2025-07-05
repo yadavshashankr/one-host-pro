@@ -464,6 +464,18 @@ async function handleFileComplete(data) {
 
             // Create download URL and trigger download
             downloadBlob(blob, fileData.fileName);
+
+            // Update UI to show downloaded state
+            const fileItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
+            if (fileItem) {
+                fileItem.classList.add('downloaded');
+                const downloadBtn = fileItem.querySelector('.icon-button');
+                if (downloadBtn) {
+                    downloadBtn.classList.add('downloaded');
+                    downloadBtn.innerHTML = '<span class="material-icons">check</span>';
+                }
+            }
+
             showNotification(`Downloaded ${fileData.fileName}`, 'success');
         }
 
@@ -1136,29 +1148,75 @@ function updateFilesList(listElement, fileInfo, type) {
     info.appendChild(nameSpan);
     info.appendChild(sizeSpan);
     info.appendChild(sharedBySpan);
+
+    // Create circular progress indicator
+    const progress = document.createElement('div');
+    progress.className = 'download-progress';
+    progress.innerHTML = `
+        <svg viewBox="0 0 36 36">
+            <circle class="progress-bg"
+                    cx="18" cy="18" r="16"
+                    stroke-dasharray="100" stroke-dashoffset="0"/>
+            <circle class="progress-bar"
+                    cx="18" cy="18" r="16"
+                    stroke-dasharray="100" stroke-dashoffset="100"/>
+        </svg>
+    `;
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';
     downloadBtn.title = 'Download file';
     downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+
+    // Function to update progress
+    const updateItemProgress = (percent) => {
+        if (percent === 0) {
+            progress.classList.add('active');
+            downloadBtn.style.display = 'none';
+        }
+        const circle = progress.querySelector('.progress-bar');
+        const offset = 100 - percent;
+        circle.style.strokeDashoffset = offset;
+        
+        if (percent >= 100) {
+            setTimeout(() => {
+                progress.classList.remove('active');
+                downloadBtn.style.display = 'flex';
+                downloadBtn.classList.add('downloaded');
+                downloadBtn.innerHTML = '<span class="material-icons">check</span>';
+                li.classList.add('downloaded');
+            }, 300);
+        }
+    };
+
     downloadBtn.onclick = async () => {
         try {
             if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
                 // For sent files, we have the blob locally
+                updateItemProgress(0);
+                updateItemProgress(100);
                 const blob = sentFileBlobs.get(fileInfo.id);
                 downloadBlob(blob, fileInfo.name);
             } else {
                 // For received files, request the blob from the original sender
+                const originalProgress = updateProgress;
+                updateProgress = (percent) => {
+                    updateItemProgress(percent);
+                    originalProgress(percent);
+                };
                 await requestAndDownloadBlob(fileInfo);
             }
         } catch (error) {
             console.error('Error downloading file:', error);
+            progress.classList.remove('active');
+            downloadBtn.style.display = 'flex';
             showNotification('Failed to download file: ' + error.message, 'error');
         }
     };
     
     li.appendChild(icon);
     li.appendChild(info);
+    li.appendChild(progress);
     li.appendChild(downloadBtn);
     
     // Add to the beginning of the list for newest first

@@ -349,8 +349,11 @@ function setupConnectionHandlers(conn) {
             } else if (data.type === 'file-complete') {
                 await handleFileComplete(data);
             } else if (data.type === 'blob-request') {
-                // Handle blob request
+                // Handle direct blob request
                 await handleBlobRequest(data, conn);
+            } else if (data.type === 'blob-request-forwarded') {
+                // Handle forwarded blob request (host only)
+                await handleForwardedBlobRequest(data, conn);
             } else if (data.type === 'blob-error') {
                 showNotification(`Failed to download file: ${data.error}`, 'error');
                 elements.transferProgress.classList.add('hidden');
@@ -518,81 +521,64 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Handle blob request
-async function handleBlobRequest(data, conn) {
-    const { fileId } = data;
-    console.log('Received blob request for file:', fileId);
+// Function to request and download a blob
+async function requestAndDownloadBlob(fileInfo) {
+    // Try to connect to original sender first
+    let conn = connections.get(fileInfo.sharedBy);
+    
+    // If no direct connection to original sender, request through host
+    if (!conn || !conn.open) {
+        // Find the host connection (first established connection)
+        const hostConn = Array.from(connections.values())[0];
+        if (!hostConn || !hostConn.open) {
+            throw new Error('No connection to host available');
+        }
 
-    // Check if we have the blob
-    const blob = sentFileBlobs.get(fileId);
-    if (!blob) {
-        console.error('Blob not found for file:', fileId);
-        conn.send({
-            type: 'blob-error',
-            fileId: fileId,
-            error: 'File not available'
+        // Request blob through host
+        hostConn.send({
+            type: 'blob-request-forwarded',
+            fileId: fileInfo.id,
+            fileName: fileInfo.name,
+            originalSender: fileInfo.sharedBy,
+            requesterId: peer.id
         });
         return;
     }
 
-    try {
-        // Convert blob to array buffer
-        const buffer = await blob.arrayBuffer();
-        let offset = 0;
-        let lastProgressUpdate = 0;
+    // Direct connection available, request normally
+    elements.transferProgress.classList.remove('hidden');
+    updateProgress(0);
+    updateTransferInfo(`Requesting ${fileInfo.name}...`);
 
-        // Send file header
-        conn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            originalSender: peer.id
-        });
+    conn.send({
+        type: 'blob-request',
+        fileId: fileInfo.id,
+        fileName: fileInfo.name
+    });
+}
 
-        // Send chunks
-        while (offset < blob.size) {
-            if (!conn.open) {
-                throw new Error('Connection lost during transfer');
-            }
-
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            conn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset
-            });
-
-            offset += chunk.byteLength;
-
-            // Update progress
-            const currentProgress = (offset / blob.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
-                lastProgressUpdate = currentProgress;
-            }
-        }
-
-        // Send completion message
-        conn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size
-        });
-
-        console.log(`Blob sent successfully to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error sending blob to peer ${conn.peer}:`, error);
-        conn.send({
+// Handle forwarded blob request (host only)
+async function handleForwardedBlobRequest(data, fromConn) {
+    console.log('Handling forwarded blob request:', data);
+    
+    // Find connection to original sender
+    const originalSenderConn = connections.get(data.originalSender);
+    if (!originalSenderConn || !originalSenderConn.open) {
+        fromConn.send({
             type: 'blob-error',
-            fileId: fileId,
-            error: error.message
+            fileId: data.fileId,
+            error: 'Original sender not connected to host'
         });
+        return;
     }
+
+    // Request blob from original sender
+    originalSenderConn.send({
+        type: 'blob-request',
+        fileId: data.fileId,
+        fileName: data.fileName,
+        forwardTo: data.requesterId // Add forwarding info
+    });
 }
 
 // Update transfer info display
@@ -1239,30 +1225,6 @@ function downloadBlob(blob, fileName) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 100);
-}
-
-// Function to request and download a blob
-async function requestAndDownloadBlob(fileInfo) {
-    // Find connection to the original sender
-    const conn = connections.get(fileInfo.sharedBy);
-    if (!conn || !conn.open) {
-        throw new Error('Original sender is not connected');
-    }
-
-    // Show progress bar
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Requesting ${fileInfo.name}...`);
-
-    // Request the blob
-    conn.send({
-        type: 'blob-request',
-        fileId: fileInfo.id,
-        fileName: fileInfo.name
-    });
-
-    // The actual download will happen through the normal file transfer handlers
-    // (handleFileHeader, handleFileChunk, handleFileComplete)
 }
 
 init();

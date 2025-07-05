@@ -433,22 +433,18 @@ async function handleFileHeader(data) {
 
 // Handle file chunk
 async function handleFileChunk(data) {
-    const { fileId, chunk, offset, fileSize } = data;
+    const fileData = fileChunks[data.fileId];
+    if (!fileData) return;
+
+    fileData.chunks.push(data.data);
+    fileData.receivedSize += data.data.byteLength;
     
-    if (!receivedChunks.has(fileId)) {
-        receivedChunks.set(fileId, []);
-        receivedSizes.set(fileId, 0);
+    // Update progress more smoothly (update every 1% change)
+    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
+        updateProgress(currentProgress);
+        fileData.lastProgressUpdate = currentProgress;
     }
-
-    const chunks = receivedChunks.get(fileId);
-    chunks.push({ data: chunk, offset });
-    
-    const currentSize = receivedSizes.get(fileId) + chunk.byteLength;
-    receivedSizes.set(fileId, currentSize);
-
-    // Calculate and update progress
-    const progress = (currentSize / fileSize) * 100;
-    updateFileProgress(fileId, progress);
 }
 
 // Handle file completion
@@ -1342,140 +1338,3 @@ function downloadBlob(blob, fileName) {
 }
 
 init();
-
-function createFileListItem(fileInfo, type = 'received') {
-    const li = document.createElement('li');
-    li.className = 'files-list-item';
-    li.setAttribute('data-file-id', fileInfo.id);
-
-    const icon = document.createElement('span');
-    icon.className = 'material-icons';
-    icon.textContent = 'description';
-
-    const info = document.createElement('div');
-    info.className = 'file-info';
-
-    const nameSpan = document.createElement('div');
-    nameSpan.className = 'file-name';
-    nameSpan.textContent = fileInfo.name;
-
-    const sizeSpan = document.createElement('div');
-    sizeSpan.className = 'file-size';
-    sizeSpan.textContent = formatFileSize(fileInfo.size);
-
-    const sharedBySpan = document.createElement('div');
-    sharedBySpan.className = 'shared-by';
-    sharedBySpan.textContent = `Shared by: ${fileInfo.sharedBy || 'Unknown'}`;
-
-    info.appendChild(nameSpan);
-    info.appendChild(sizeSpan);
-    info.appendChild(sharedBySpan);
-
-    // Create action container for download, progress, and open icons
-    const actionContainer = document.createElement('div');
-    actionContainer.className = 'file-action-container';
-
-    // Download button with icon
-    const downloadBtn = document.createElement('button');
-    downloadBtn.className = 'icon-button download-button';
-    downloadBtn.title = 'Download file';
-    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
-
-    // Progress indicator (initially hidden)
-    const progressIndicator = document.createElement('div');
-    progressIndicator.className = 'progress-indicator';
-    progressIndicator.style.display = 'none';
-    progressIndicator.innerHTML = `
-        <svg viewBox="0 0 36 36">
-            <circle class="progress-bg" cx="18" cy="18" r="16" 
-                    stroke-width="2" fill="none"/>
-            <circle class="progress-bar" cx="18" cy="18" r="16" 
-                    stroke-width="2" fill="none"/>
-        </svg>
-    `;
-
-    // Open file button (initially hidden)
-    const openBtn = document.createElement('button');
-    openBtn.className = 'icon-button open-button';
-    openBtn.title = 'Open file';
-    openBtn.style.display = 'none';
-    openBtn.innerHTML = '<span class="material-icons">open_in_new</span>';
-
-    actionContainer.appendChild(downloadBtn);
-    actionContainer.appendChild(progressIndicator);
-    actionContainer.appendChild(openBtn);
-
-    // Add click handlers
-    downloadBtn.onclick = async () => {
-        try {
-            if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
-                // For sent files, we have the blob locally
-                downloadBtn.style.display = 'none';
-                progressIndicator.style.display = 'flex';
-                
-                const blob = sentFileBlobs.get(fileInfo.id);
-                await downloadBlob(blob, fileInfo.name);
-                
-                // Show success state
-                progressIndicator.style.display = 'none';
-                openBtn.style.display = 'flex';
-                li.classList.add('downloaded');
-            } else {
-                // For received files, request the blob from the original sender
-                downloadBtn.style.display = 'none';
-                progressIndicator.style.display = 'flex';
-                
-                await requestAndDownloadBlob(fileInfo);
-                
-                // Success state will be handled by the chunk completion handler
-            }
-        } catch (error) {
-            console.error('Error downloading file:', error);
-            // Reset UI on error
-            progressIndicator.style.display = 'none';
-            downloadBtn.style.display = 'flex';
-            showNotification('Failed to download file: ' + error.message, 'error');
-        }
-    };
-
-    openBtn.onclick = () => {
-        const blob = type === 'sent' ? sentFileBlobs.get(fileInfo.id) : receivedFiles.get(fileInfo.id);
-        if (blob) {
-            const url = URL.createObjectURL(blob);
-            window.open(url, '_blank');
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-    };
-
-    li.appendChild(icon);
-    li.appendChild(info);
-    li.appendChild(actionContainer);
-
-    return li;
-}
-
-// Update progress for a specific file
-function updateFileProgress(fileId, progress) {
-    const fileItem = document.querySelector(`[data-file-id="${fileId}"]`);
-    if (!fileItem) return;
-
-    const progressBar = fileItem.querySelector('.progress-bar');
-    if (!progressBar) return;
-
-    const circumference = 100.53; // 2 * PI * 16 (radius)
-    const offset = circumference - (progress / 100) * circumference;
-    progressBar.style.strokeDashoffset = offset;
-
-    // If download is complete, update UI
-    if (progress >= 100) {
-        setTimeout(() => {
-            const progressIndicator = fileItem.querySelector('.progress-indicator');
-            const openBtn = fileItem.querySelector('.open-button');
-            
-            if (progressIndicator) progressIndicator.style.display = 'none';
-            if (openBtn) openBtn.style.display = 'flex';
-            
-            fileItem.classList.add('downloaded');
-        }, 300);
-    }
-}

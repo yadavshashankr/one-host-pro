@@ -542,7 +542,7 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Update handleBlobRequest to ensure connection stays open
+// Handle blob request
 async function handleBlobRequest(data, conn) {
     const { fileId, forwardTo } = data;
     console.log('Received blob request for file:', fileId);
@@ -563,6 +563,7 @@ async function handleBlobRequest(data, conn) {
         // Convert blob to array buffer
         const buffer = await blob.arrayBuffer();
         let offset = 0;
+        let lastProgressUpdate = 0;
 
         // If this is a forwarded request, send to the correct peer
         const targetConn = forwardTo ? connections.get(forwardTo) : conn;
@@ -582,10 +583,7 @@ async function handleBlobRequest(data, conn) {
             originalSender: peer.id
         });
 
-        // Wait a bit to ensure header is processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Send chunks with a small delay between them to prevent overwhelming the connection
+        // Send chunks
         while (offset < blob.size) {
             if (!sendToConn.open) {
                 throw new Error('Connection lost during transfer');
@@ -601,14 +599,13 @@ async function handleBlobRequest(data, conn) {
 
             offset += chunk.byteLength;
 
-            // Add a small delay between chunks for very small files
-            if (blob.size < CHUNK_SIZE * 10) {
-                await new Promise(resolve => setTimeout(resolve, 50));
+            // Update progress
+            const currentProgress = (offset / blob.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress);
+                lastProgressUpdate = currentProgress;
             }
         }
-
-        // Wait a bit before sending completion message
-        await new Promise(resolve => setTimeout(resolve, 100));
 
         // Send completion message
         sendToConn.send({
@@ -622,17 +619,15 @@ async function handleBlobRequest(data, conn) {
         console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
     } catch (error) {
         console.error(`Error sending blob to peer:`, error);
-        if (conn.open) {
-            conn.send({
-                type: 'blob-error',
-                fileId: fileId,
-                error: error.message
-            });
-        }
+        conn.send({
+            type: 'blob-error',
+            fileId: fileId,
+            error: error.message
+        });
     }
 }
 
-// Update requestAndDownloadBlob to handle connection issues better
+// Function to request and download a blob
 async function requestAndDownloadBlob(fileInfo) {
     // Try to connect to original sender first
     let conn = connections.get(fileInfo.sharedBy);
@@ -650,24 +645,13 @@ async function requestAndDownloadBlob(fileInfo) {
         updateProgress(0);
         updateTransferInfo(`Requesting ${fileInfo.name} through host...`);
 
-        // Add retry logic for connection issues
-        let retries = 3;
-        while (retries > 0) {
-            try {
-                hostConn.send({
-                    type: 'blob-request-forwarded',
-                    fileId: fileInfo.id,
-                    fileName: fileInfo.name,
-                    originalSender: fileInfo.sharedBy,
-                    requesterId: peer.id
-                });
-                break;
-            } catch (error) {
-                retries--;
-                if (retries === 0) throw error;
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
+        hostConn.send({
+            type: 'blob-request-forwarded',
+            fileId: fileInfo.id,
+            fileName: fileInfo.name,
+            originalSender: fileInfo.sharedBy,
+            requesterId: peer.id
+        });
         return;
     }
 
@@ -676,22 +660,11 @@ async function requestAndDownloadBlob(fileInfo) {
     updateProgress(0);
     updateTransferInfo(`Requesting ${fileInfo.name}...`);
 
-    // Add retry logic for direct requests
-    let retries = 3;
-    while (retries > 0) {
-        try {
-            conn.send({
-                type: 'blob-request',
-                fileId: fileInfo.id,
-                fileName: fileInfo.name
-            });
-            break;
-        } catch (error) {
-            retries--;
-            if (retries === 0) throw error;
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
+    conn.send({
+        type: 'blob-request',
+        fileId: fileInfo.id,
+        fileName: fileInfo.name
+    });
 }
 
 // Handle forwarded blob request (host only)

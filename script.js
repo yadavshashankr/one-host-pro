@@ -1,36 +1,25 @@
 // Constants
-const CHUNK_SIZE = 65536; // Increased to 64KB for faster transfers
 const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 60000; // 60 seconds
 
-// Constants for network optimization
+// Device detection
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+// Network configuration
 const NETWORK_CONFIG = {
-    lan: {
-        chunkSize: 262144, // 256KB for LAN
-        minDelay: 1, // 1ms minimum delay between chunks
-        connectionTimeout: 10000, // 10 seconds
-        transferTimeout: 60000 // 60 seconds
-    },
-    wan: {
-        chunkSize: 16384, // 16KB for WAN
-        minDelay: 50, // 50ms delay between chunks
+    default: {
+        chunkSize: isMobile ? 32768 : 65536, // 32KB for mobile, 64KB for desktop
+        minDelay: isMobile ? 50 : 10, // longer delay for mobile
         connectionTimeout: 30000, // 30 seconds
-        transferTimeout: 120000 // 120 seconds
+        transferTimeout: 60000 // 60 seconds
     }
 };
 
-// Add device detection
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-// Update chunk size for mobile devices
-const MOBILE_CHUNK_SIZE = 8192; // 8KB chunks for mobile
-const DESKTOP_CHUNK_SIZE = 16384; // 16KB chunks for desktop
-const CHUNK_SIZE = isMobile ? MOBILE_CHUNK_SIZE : DESKTOP_CHUNK_SIZE;
-
-// Add connection stabilization delays
+// Transfer configuration
+const CHUNK_SIZE = NETWORK_CONFIG.default.chunkSize;
 const DELAYS = {
     beforeTransfer: isMobile ? 500 : 100,
     betweenChunks: isMobile ? 100 : 50,
@@ -67,7 +56,7 @@ const elements = {
 
 // State
 let peer = null;
-let connections = new Map(); // Map to store multiple connections
+const connections = new Map(); // Map to store multiple connections
 let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
@@ -276,10 +265,11 @@ function initPeerJS() {
         });
 
         peer.on('open', (id) => {
+            console.log('My peer ID is:', id);
             elements.peerId.textContent = id;
             updateConnectionStatus('', 'Ready to connect');
             generateQRCode(id);
-            initShareButton(); // Initialize share button after getting peer ID
+            initShareButton();
         });
 
         peer.on('connection', (conn) => {
@@ -300,13 +290,19 @@ function initPeerJS() {
                 errorMessage = 'Network connection error';
             } else if (error.type === 'disconnected') {
                 errorMessage = 'Disconnected from server';
+                // Try to reconnect
+                if (peer && !peer.destroyed) {
+                    setTimeout(() => {
+                        console.log('Attempting to reconnect...');
+                        peer.reconnect();
+                    }, 3000);
+                }
             } else if (error.type === 'server-error') {
                 errorMessage = 'Server error occurred';
             }
             
             updateConnectionStatus('', errorMessage);
             showNotification(errorMessage, 'error');
-            resetConnection();
         });
 
         peer.on('disconnected', () => {
@@ -315,13 +311,16 @@ function initPeerJS() {
             isConnectionReady = false;
             
             // Try to reconnect
-            setTimeout(() => {
-                if (peer && peer.disconnected) {
-                    console.log('Attempting to reconnect...');
-                    peer.reconnect();
-                }
-            }, 3000);
+            if (!peer.destroyed) {
+                console.log('Attempting to reconnect...');
+                setTimeout(() => {
+                    if (peer && peer.disconnected) {
+                        peer.reconnect();
+                    }
+                }, 3000);
+            }
         });
+
     } catch (error) {
         console.error('PeerJS Initialization Error:', error);
         updateConnectionStatus('', 'Initialization failed');
@@ -1700,7 +1699,7 @@ function isLocalNetwork() {
 
 // Get network configuration based on connection type
 function getNetworkConfig() {
-    return isLocalNetwork() ? NETWORK_CONFIG.lan : NETWORK_CONFIG.wan;
+    return isLocalNetwork() ? NETWORK_CONFIG.default : NETWORK_CONFIG.default;
 }
 
 // Calculate optimal chunk size based on file size and network

@@ -64,6 +64,8 @@ let fileChunks = {}; // Initialize fileChunks object
 let keepAliveInterval = null;
 let connectionTimeouts = new Map();
 let isPageVisible = true;
+let isHost = false;
+let hostId = null;
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -270,6 +272,16 @@ function initPeerJS() {
             updateConnectionStatus('', 'Ready to connect');
             generateQRCode(id);
             initShareButton();
+            
+            // Check URL parameters for host status
+            const urlParams = new URLSearchParams(window.location.search);
+            isHost = urlParams.get('host') === 'true';
+            if (isHost) {
+                console.log('Running as host');
+                document.title = 'One-Host (Host)';
+                elements.statusText.textContent = 'Running as host';
+                elements.statusDot.className = 'status-dot host';
+            }
         });
 
         peer.on('connection', (conn) => {
@@ -382,13 +394,14 @@ function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
         connections.set(conn.peer, conn);
-        updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
+        updateConnectionStatus('connected');
         elements.fileTransferSection.classList.remove('hidden');
         
         // Send initial connection notification
         conn.send({
             type: 'connection-notification',
-            peerId: peer.id
+            peerId: peer.id,
+            isHost: isHost
         });
     });
 
@@ -403,17 +416,25 @@ function setupConnectionHandlers(conn) {
             switch (data.type) {
                 case 'connection-notification':
                     console.log('Connection notification from:', conn.peer);
-                    updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
-                    // Send acknowledgment
+                    if (data.isHost) {
+                        hostId = conn.peer;
+                        console.log('Connected to host:', hostId);
+                    }
+                    updateConnectionStatus('connected');
                     conn.send({
                         type: 'connection-ack',
-                        peerId: peer.id
+                        peerId: peer.id,
+                        isHost: isHost
                     });
                     break;
 
                 case 'connection-ack':
                     console.log('Connection acknowledged by:', conn.peer);
-                    updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
+                    if (data.isHost) {
+                        hostId = conn.peer;
+                        console.log('Connected to host:', hostId);
+                    }
+                    updateConnectionStatus('connected');
                     break;
 
                 case 'keep-alive':
@@ -434,24 +455,25 @@ function setupConnectionHandlers(conn) {
                     // Handle disconnect notification
                     console.log(`Disconnect notification received from peer ${conn.peer}`);
                     connections.delete(conn.peer);
-                    updateConnectionStatus('',
-                        connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+                    updateConnectionStatus(
+                        connections.size > 0 ? 'connected' : 'disconnected',
+                        connections.size > 0 ? '' : 'Disconnected'
+                    );
                     showNotification(`Peer ${conn.peer} disconnected`, 'warning');
                     break;
 
                 case 'file-info':
-                    // Handle file info without blob
-                    const fileInfo = {
-                        id: data.id,
-                        name: data.name,
-                        size: data.size,
-                        type: data.type,
-                        senderId: data.senderId
-                    };
-                    
-                    if (isHost) {
-                        // Forward file info to all other peers
-                        await forwardFileInfoToPeers(fileInfo, data.id);
+                    console.log('Received file info:', data);
+                    // Add file to the list if we're the host or it's meant for us
+                    if (isHost || data.targetPeerId === peer.id) {
+                        addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
+                    }
+                    // Forward file info if we're the host
+                    if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
+                        const targetConn = connections.get(data.targetPeerId);
+                        if (targetConn && targetConn.open) {
+                            targetConn.send(data);
+                        }
                     }
                     break;
 
@@ -495,6 +517,21 @@ function setupConnectionHandlers(conn) {
                     }
                     break;
 
+                case 'file-update':
+                    console.log('Received file update:', data);
+                    // Process file update if we're the host or it's meant for us
+                    if (isHost || data.targetPeerId === peer.id) {
+                        updateFileStatus(data.fileId, data.status, data.progress);
+                    }
+                    // Forward update if we're the host
+                    if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
+                        const targetConn = connections.get(data.targetPeerId);
+                        if (targetConn && targetConn.open) {
+                            targetConn.send(data);
+                        }
+                    }
+                    break;
+
                 default:
                     console.warn('Unknown data type:', data.type);
             }
@@ -511,7 +548,7 @@ function setupConnectionHandlers(conn) {
         connections.delete(conn.peer);
         updateConnectionStatus(
             connections.size > 0 ? 'connected' : 'disconnected',
-            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected'
+            connections.size > 0 ? '' : 'Disconnected'
         );
         showNotification(`Peer ${conn.peer} disconnected`, 'warning');
     });
@@ -1264,7 +1301,17 @@ document.head.appendChild(style);
 // Update updateConnectionStatus for better status display
 function updateConnectionStatus(status, message) {
     elements.statusDot.className = `status-dot ${status}`;
-    elements.statusText.textContent = message;
+    
+    // Update status text to show number of connected peers
+    if (status === 'connected') {
+        const peerCount = connections.size;
+        const peerText = peerCount === 1 ? 'peer' : 'peers';
+        elements.statusText.textContent = `Connected to ${peerCount} ${peerText}`;
+        document.title = isHost ? `One-Host (Host) - ${peerCount} ${peerText}` : `One-Host - ${peerCount} ${peerText}`;
+    } else {
+        elements.statusText.textContent = message;
+        document.title = isHost ? 'One-Host (Host)' : 'One-Host';
+    }
     
     // Update UI based on connection status
     if (status === 'connected') {
@@ -1612,6 +1659,62 @@ function validateChunkData(data) {
            typeof data.fileId === 'string' && 
            data.data instanceof ArrayBuffer &&
            typeof data.offset === 'number';
+}
+
+// Update file sharing functions
+function shareFile(file, targetPeerId = null) {
+    const fileId = generateFileId();
+    console.log('Sharing file:', file.name, 'ID:', fileId, 'Target:', targetPeerId);
+
+    // Store the file blob
+    sentFileBlobs.set(fileId, file);
+
+    // Prepare file info
+    const fileInfo = {
+        type: 'file-info',
+        fileId: fileId,
+        fileName: file.name,
+        fileSize: file.size,
+        senderId: peer.id,
+        targetPeerId: targetPeerId
+    };
+
+    // Send to all connected peers if no specific target
+    if (!targetPeerId) {
+        connections.forEach(conn => {
+            if (conn.open) {
+                conn.send(fileInfo);
+            }
+        });
+    } else {
+        // Send to specific peer or through host
+        const directConn = connections.get(targetPeerId);
+        if (directConn && directConn.open) {
+            directConn.send(fileInfo);
+        } else if (hostId && connections.has(hostId)) {
+            connections.get(hostId).send(fileInfo);
+        } else {
+            showNotification('No connection available to share file', 'error');
+            return;
+        }
+    }
+
+    // Add to our own list
+    addFileToList(fileId, file.name, file.size);
+}
+
+// Update file status tracking
+function updateFileStatus(fileId, status, progress = 0) {
+    const fileElement = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (fileElement) {
+        const statusElement = fileElement.querySelector('.file-status');
+        if (statusElement) {
+            statusElement.textContent = status;
+            if (progress > 0) {
+                statusElement.textContent += ` (${Math.round(progress)}%)`;
+            }
+        }
+    }
 }
 
 init();

@@ -39,7 +39,7 @@ const elements = {
     transferProgress: document.getElementById('transfer-progress'),
     progress: document.getElementById('progress'),
     transferInfo: document.getElementById('transfer-info'),
-    fileList: document.getElementById('file-list'),
+    fileList: document.getElementById('file-list') || document.querySelector('#receivedFiles ul'),
     statusText: document.getElementById('status-text'),
     statusDot: document.getElementById('status-dot'),
     browserSupport: document.getElementById('browser-support'),
@@ -1079,8 +1079,29 @@ function updateProgress(percent) {
 function addFileToList(fileId, fileName, fileSize, senderId) {
     console.log('Adding file to list:', { fileId, fileName, fileSize, senderId });
 
+    // Ensure we have a valid file list element
+    if (!elements.fileList) {
+        console.error('File list element not found, attempting to create');
+        const ul = document.createElement('ul');
+        if (elements.receivedFiles) {
+            elements.receivedFiles.appendChild(ul);
+            elements.fileList = ul;
+        } else {
+            console.error('Cannot add file: Received files container not found');
+            return;
+        }
+    }
+
+    // Check if file already exists
+    const existingFile = elements.fileList.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingFile) {
+        console.log('File already in list:', fileId);
+        return;
+    }
+
     // Create list item
     const li = document.createElement('li');
+    li.dataset.fileId = fileId;
     
     // Create name and size span
     const nameSpan = document.createElement('span');
@@ -1096,7 +1117,7 @@ function addFileToList(fileId, fileName, fileSize, senderId) {
     li.appendChild(nameSpan);
     li.appendChild(downloadBtn);
     
-    // Add to existing file list
+    // Add to file list
     elements.fileList.appendChild(li);
     
     // Show received files section
@@ -1275,10 +1296,25 @@ elements.fileInput.addEventListener('change', (e) => {
 
 // Initialize the application
 function init() {
-    if (!checkBrowserSupport()) {
-        return;
+    if (!elements.fileList) {
+        console.error('File list element not found, creating one');
+        const ul = document.createElement('ul');
+        if (elements.receivedFiles) {
+            elements.receivedFiles.appendChild(ul);
+            elements.fileList = ul;
+        } else {
+            console.error('Received files container not found');
+        }
     }
 
+    // Add Enter key handler for peer ID input
+    elements.remotePeerId.addEventListener('keyup', (event) => {
+        if (event.key === 'Enter') {
+            elements.connectButton.click();
+        }
+    });
+
+    // Initialize PeerJS connection
     initPeerJS();
     initIndexedDB();
     loadRecentPeers();

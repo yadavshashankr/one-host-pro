@@ -1075,25 +1075,21 @@ function updateProgress(percent) {
     }
 }
 
-// UI Functions
+// Update file list display function
 function addFileToList(fileId, fileName, fileSize, senderId) {
     console.log('Adding file to list:', { fileId, fileName, fileSize, senderId });
 
-    // Ensure we have a valid file list element
-    if (!elements.fileList) {
-        console.error('File list element not found, attempting to create');
-        const ul = document.createElement('ul');
-        if (elements.receivedFiles) {
-            elements.receivedFiles.appendChild(ul);
-            elements.fileList = ul;
-        } else {
-            console.error('Cannot add file: Received files container not found');
-            return;
-        }
+    // Get the received files list
+    const receivedFiles = document.getElementById('receivedFiles');
+    const fileList = receivedFiles?.querySelector('ul');
+
+    if (!fileList) {
+        console.error('File list element not found');
+        return;
     }
 
     // Check if file already exists
-    const existingFile = elements.fileList.querySelector(`[data-file-id="${fileId}"]`);
+    const existingFile = fileList.querySelector(`[data-file-id="${fileId}"]`);
     if (existingFile) {
         console.log('File already in list:', fileId);
         return;
@@ -1108,22 +1104,23 @@ function addFileToList(fileId, fileName, fileSize, senderId) {
     nameSpan.textContent = `${fileName} (${formatFileSize(fileSize)})`;
     
     // Create download button
-    const downloadBtn = document.createElement('button');
+    const downloadBtn = document.createElement('a');
     downloadBtn.className = 'button';
     downloadBtn.textContent = 'Download';
-    downloadBtn.onclick = () => requestBlob(fileId, fileName, senderId);
+    downloadBtn.onclick = (e) => {
+        e.preventDefault();
+        requestBlob(fileId, fileName, senderId);
+    };
     
     // Assemble list item
     li.appendChild(nameSpan);
     li.appendChild(downloadBtn);
     
     // Add to file list
-    elements.fileList.appendChild(li);
+    fileList.appendChild(li);
     
     // Show received files section
-    if (elements.receivedFiles) {
-        elements.receivedFiles.classList.remove('hidden');
-    }
+    receivedFiles.classList.remove('hidden');
 
     console.log('File added to list successfully:', fileId);
 }

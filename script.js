@@ -61,6 +61,13 @@ const MAX_RECENT_PEERS = 5;
 let fileQueue = [];
 let isProcessingQueue = false;
 
+// Add transfer state tracking
+const transferState = {
+    activeTransfers: new Map(), // Map of fileId to transfer state
+    transferQueue: [], // Queue of pending transfers
+    isProcessing: false
+};
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -542,7 +549,7 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Handle blob request
+// Update handleBlobRequest for better transfer management
 async function handleBlobRequest(data, conn) {
     const { fileId, forwardTo } = data;
     console.log('Received blob request for file:', fileId);
@@ -573,28 +580,57 @@ async function handleBlobRequest(data, conn) {
 
         const sendToConn = targetConn || conn;
 
-        // Send file header
-        sendToConn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            originalSender: peer.id
+        // Track this transfer
+        transferState.activeTransfers.set(fileId, {
+            conn: sendToConn,
+            startTime: Date.now(),
+            size: blob.size,
+            progress: 0
         });
 
-        // Send chunks
+        // Send file header with delay to ensure connection stability
+        await new Promise((resolve) => {
+            setTimeout(() => {
+                if (sendToConn.open) {
+                    sendToConn.send({
+                        type: 'file-header',
+                        fileId: fileId,
+                        fileName: data.fileName,
+                        fileType: blob.type,
+                        fileSize: blob.size,
+                        originalSender: peer.id
+                    });
+                    resolve();
+                } else {
+                    throw new Error('Connection lost before transfer could start');
+                }
+            }, 100);
+        });
+
+        // Send chunks with controlled pacing
         while (offset < blob.size) {
             if (!sendToConn.open) {
                 throw new Error('Connection lost during transfer');
             }
 
             const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            sendToConn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset
+            
+            // Use promise to control chunk sending
+            await new Promise((resolve, reject) => {
+                try {
+                    sendToConn.send({
+                        type: 'file-chunk',
+                        fileId: fileId,
+                        data: chunk,
+                        offset: offset
+                    });
+
+                    // Add delay based on file size and chunk size
+                    const delay = blob.size < CHUNK_SIZE * 10 ? 100 : 50;
+                    setTimeout(resolve, delay);
+                } catch (error) {
+                    reject(error);
+                }
             });
 
             offset += chunk.byteLength;
@@ -604,67 +640,147 @@ async function handleBlobRequest(data, conn) {
             if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress);
                 lastProgressUpdate = currentProgress;
+
+                // Update transfer state
+                const transfer = transferState.activeTransfers.get(fileId);
+                if (transfer) {
+                    transfer.progress = currentProgress;
+                }
             }
         }
 
-        // Send completion message
-        sendToConn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size
-        });
+        // Wait before sending completion message
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        // Send completion message if connection is still open
+        if (sendToConn.open) {
+            sendToConn.send({
+                type: 'file-complete',
+                fileId: fileId,
+                fileName: data.fileName,
+                fileType: blob.type,
+                fileSize: blob.size
+            });
+        } else {
+            throw new Error('Connection lost before completion');
+        }
 
         console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
     } catch (error) {
         console.error(`Error sending blob to peer:`, error);
-        conn.send({
-            type: 'blob-error',
-            fileId: fileId,
-            error: error.message
-        });
+        // Only send error if connection is still open
+        if (conn.open) {
+            conn.send({
+                type: 'blob-error',
+                fileId: fileId,
+                error: error.message
+            });
+        }
+    } finally {
+        // Clean up transfer state
+        transferState.activeTransfers.delete(fileId);
     }
 }
 
-// Function to request and download a blob
-async function requestAndDownloadBlob(fileInfo) {
-    // Try to connect to original sender first
-    let conn = connections.get(fileInfo.sharedBy);
+// Update processFileQueue for better queue management
+async function processFileQueue() {
+    if (transferState.isProcessing || fileQueue.length === 0) return;
     
-    // If no direct connection to original sender, request through host
-    if (!conn || !conn.open) {
-        // Find the host connection (first established connection)
-        const hostConn = Array.from(connections.values())[0];
-        if (!hostConn || !hostConn.open) {
-            throw new Error('No connection to host available');
+    transferState.isProcessing = true;
+    updateTransferInfo(`Processing queue: ${fileQueue.length} file(s) remaining`);
+    
+    while (fileQueue.length > 0) {
+        const file = fileQueue[0]; // Peek at the next file
+        try {
+            await sendFile(file);
+            fileQueue.shift(); // Only remove the file if sending was successful
+            // Add delay between files
+            await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+            console.error('Error processing file from queue:', error);
+            showNotification(`Failed to send ${file.name}: ${error.message}`, 'error');
+            
+            // If the error is connection-related, pause queue processing
+            if (error.message.includes('connection') || error.message.includes('connected')) {
+                break;
+            } else {
+                // For other errors, remove the problematic file and continue
+                fileQueue.shift();
+            }
         }
+    }
+    
+    transferState.isProcessing = false;
+    updateTransferInfo('');
+}
 
-        // Request blob through host
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
-        updateTransferInfo(`Requesting ${fileInfo.name} through host...`);
+// Update requestAndDownloadBlob for better reliability
+async function requestAndDownloadBlob(fileInfo) {
+    const maxRetries = 3;
+    let retryCount = 0;
+    let lastError = null;
 
-        hostConn.send({
-            type: 'blob-request-forwarded',
-            fileId: fileInfo.id,
-            fileName: fileInfo.name,
-            originalSender: fileInfo.sharedBy,
-            requesterId: peer.id
-        });
-        return;
+    while (retryCount < maxRetries) {
+        try {
+            // Try to connect to original sender first
+            let conn = connections.get(fileInfo.sharedBy);
+            
+            // If no direct connection to original sender, request through host
+            if (!conn || !conn.open) {
+                // Find the host connection (first established connection)
+                const hostConn = Array.from(connections.values())[0];
+                if (!hostConn || !hostConn.open) {
+                    throw new Error('No connection to host available');
+                }
+
+                // Request blob through host
+                elements.transferProgress.classList.remove('hidden');
+                updateProgress(0);
+                updateTransferInfo(`Requesting ${fileInfo.name} through host...`);
+
+                // Add delay before sending request
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                hostConn.send({
+                    type: 'blob-request-forwarded',
+                    fileId: fileInfo.id,
+                    fileName: fileInfo.name,
+                    originalSender: fileInfo.sharedBy,
+                    requesterId: peer.id
+                });
+                return;
+            }
+
+            // Direct connection available, request normally
+            elements.transferProgress.classList.remove('hidden');
+            updateProgress(0);
+            updateTransferInfo(`Requesting ${fileInfo.name}...`);
+
+            // Add delay before sending request
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            conn.send({
+                type: 'blob-request',
+                fileId: fileInfo.id,
+                fileName: fileInfo.name
+            });
+
+            // Successfully sent request
+            return;
+        } catch (error) {
+            lastError = error;
+            retryCount++;
+            
+            if (retryCount < maxRetries) {
+                // Wait before retrying (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, retryCount)));
+                console.log(`Retrying download request (attempt ${retryCount + 1}/${maxRetries})`);
+            }
+        }
     }
 
-    // Direct connection available, request normally
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Requesting ${fileInfo.name}...`);
-
-    conn.send({
-        type: 'blob-request',
-        fileId: fileInfo.id,
-        fileName: fileInfo.name
-    });
+    // If we get here, all retries failed
+    throw lastError || new Error('Failed to request file after multiple attempts');
 }
 
 // Handle forwarded blob request (host only)
@@ -756,29 +872,6 @@ function broadcastFileUpdate(fileInfo) {
             conn.send(updateData);
         }
     }
-}
-
-// Process file queue
-async function processFileQueue() {
-    if (isProcessingQueue || fileQueue.length === 0) return;
-    
-    isProcessingQueue = true;
-    updateTransferInfo(`Processing queue: ${fileQueue.length} file(s) remaining`);
-    
-    while (fileQueue.length > 0) {
-        const file = fileQueue.shift();
-        try {
-            await sendFile(file);
-            // Small delay between files to prevent overwhelming the connection
-            await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (error) {
-            console.error('Error processing file from queue:', error);
-            showNotification(`Failed to send ${file.name}: ${error.message}`, 'error');
-        }
-    }
-    
-    isProcessingQueue = false;
-    updateTransferInfo('');
 }
 
 // Modify sendFile function to work with queue

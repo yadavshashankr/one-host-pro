@@ -1089,31 +1089,49 @@ function updateProgress(percent) {
 }
 
 // UI Functions
-function addFileToList(name, url, size) {
-    const li = document.createElement('li');
-    const nameSpan = document.createElement('span');
-    nameSpan.textContent = `${name} (${formatFileSize(size)})`;
+function addFileToList(fileId, fileName, fileSize, senderId) {
+    console.log('Adding file to list:', { fileId, fileName, fileSize, senderId });
     
-    const downloadBtn = document.createElement('a');
-    downloadBtn.href = url;
-    downloadBtn.download = name;
-    downloadBtn.className = 'button';
-    downloadBtn.textContent = 'Download';
-    
-    // Add click handler to handle blob URL cleanup
-    downloadBtn.addEventListener('click', () => {
-        setTimeout(() => {
-            URL.revokeObjectURL(url);
-        }, 1000);
-    });
-    
-    li.appendChild(nameSpan);
-    li.appendChild(downloadBtn);
-    elements.fileList.appendChild(li);
-    
-    if (elements.receivedFiles) {
-        elements.receivedFiles.classList.remove('hidden');
+    const fileList = document.getElementById('fileList');
+    if (!fileList) {
+        console.error('File list element not found');
+        return;
     }
+
+    // Check if file already exists in list
+    const existingFile = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingFile) {
+        console.log('File already in list:', fileId);
+        return;
+    }
+
+    const fileElement = document.createElement('div');
+    fileElement.className = 'file-item';
+    fileElement.dataset.fileId = fileId;
+
+    const nameElement = document.createElement('span');
+    nameElement.className = 'file-name';
+    nameElement.textContent = fileName;
+
+    const sizeElement = document.createElement('span');
+    sizeElement.className = 'file-size';
+    sizeElement.textContent = formatFileSize(fileSize);
+
+    const statusElement = document.createElement('span');
+    statusElement.className = 'file-status';
+    statusElement.textContent = 'Available';
+
+    const downloadButton = document.createElement('button');
+    downloadButton.textContent = 'Download';
+    downloadButton.onclick = () => requestBlob(fileId, fileName, senderId);
+
+    fileElement.appendChild(nameElement);
+    fileElement.appendChild(sizeElement);
+    fileElement.appendChild(statusElement);
+    fileElement.appendChild(downloadButton);
+
+    fileList.appendChild(fileElement);
+    console.log('File added to list:', fileId);
 }
 
 function formatFileSize(bytes) {
@@ -1302,19 +1320,20 @@ document.head.appendChild(style);
 function updateConnectionStatus(status, message) {
     elements.statusDot.className = `status-dot ${status}`;
     
-    // Update status text to show number of connected peers
-    if (status === 'connected') {
-        const peerCount = connections.size;
+    // Always show number of connected peers if there are any
+    const peerCount = connections.size;
+    if (peerCount > 0) {
         const peerText = peerCount === 1 ? 'peer' : 'peers';
-        elements.statusText.textContent = `Connected to ${peerCount} ${peerText}`;
+        const statusText = `Connected to ${peerCount} ${peerText}`;
+        elements.statusText.textContent = isHost ? `Running as host - ${statusText}` : statusText;
         document.title = isHost ? `One-Host (Host) - ${peerCount} ${peerText}` : `One-Host - ${peerCount} ${peerText}`;
     } else {
-        elements.statusText.textContent = message;
+        elements.statusText.textContent = message || 'Disconnected';
         document.title = isHost ? 'One-Host (Host)' : 'One-Host';
     }
     
-    // Update UI based on connection status
-    if (status === 'connected') {
+    // Update UI elements
+    if (status === 'connected' || status === 'host') {
         elements.fileTransferSection.classList.remove('hidden');
         elements.connectButton.disabled = false;
         elements.connectButton.textContent = 'Connect';
@@ -1664,12 +1683,12 @@ function validateChunkData(data) {
 // Update file sharing functions
 function shareFile(file, targetPeerId = null) {
     const fileId = generateFileId();
-    console.log('Sharing file:', file.name, 'ID:', fileId, 'Target:', targetPeerId);
+    console.log('Sharing file:', { name: file.name, size: file.size, id: fileId, target: targetPeerId });
 
     // Store the file blob
     sentFileBlobs.set(fileId, file);
 
-    // Prepare file info
+    // Prepare file info message
     const fileInfo = {
         type: 'file-info',
         fileId: fileId,
@@ -1679,28 +1698,16 @@ function shareFile(file, targetPeerId = null) {
         targetPeerId: targetPeerId
     };
 
-    // Send to all connected peers if no specific target
-    if (!targetPeerId) {
-        connections.forEach(conn => {
-            if (conn.open) {
-                conn.send(fileInfo);
-            }
-        });
-    } else {
-        // Send to specific peer or through host
-        const directConn = connections.get(targetPeerId);
-        if (directConn && directConn.open) {
-            directConn.send(fileInfo);
-        } else if (hostId && connections.has(hostId)) {
-            connections.get(hostId).send(fileInfo);
-        } else {
-            showNotification('No connection available to share file', 'error');
-            return;
-        }
-    }
+    // Add to our own list first
+    addFileToList(fileId, file.name, file.size, peer.id);
 
-    // Add to our own list
-    addFileToList(fileId, file.name, file.size);
+    // Send to connected peers
+    connections.forEach(conn => {
+        if (conn.open) {
+            console.log('Sending file info to peer:', conn.peer);
+            conn.send(fileInfo);
+        }
+    });
 }
 
 // Update file status tracking

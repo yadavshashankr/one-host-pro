@@ -450,91 +450,118 @@ function generateFileId(file) {
 // Handle file header
 async function handleFileHeader(data) {
     console.log('Received file header:', data);
-    fileChunks[data.fileId] = {
-        chunks: [],
-        fileName: data.fileName,
-        fileType: data.fileType,
-        fileSize: data.fileSize,
-        receivedSize: 0,
-        originalSender: data.originalSender
-    };
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
+    try {
+        fileChunks[data.fileId] = {
+            fileName: data.fileName,
+            fileType: data.fileType,
+            fileSize: data.fileSize,
+            chunks: [],
+            receivedSize: 0,
+            lastProgressUpdate: 0
+        };
+        
+        // Initialize transfer state
+        transferState.activeTransfers.set(data.fileId, {
+            startTime: Date.now(),
+            fileName: data.fileName,
+            fileSize: data.fileSize,
+            receivedSize: 0,
+            chunks: []
+        });
+
+        updateTransferInfo(`Receiving ${data.fileName}`);
+        elements.transferProgress.classList.remove('hidden');
+    } catch (error) {
+        console.error('Error handling file header:', error);
+        showNotification('Error initializing file transfer', 'error');
+    }
 }
 
 // Handle file chunk
 async function handleFileChunk(data) {
-    const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    try {
+        const fileData = fileChunks[data.fileId];
+        if (!fileData) {
+            console.error('No file data found for:', data.fileId);
+            return;
+        }
 
-    fileData.chunks.push(data.data);
-    fileData.receivedSize += data.data.byteLength;
-    
-    // Update progress more smoothly
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress);
-        fileData.lastProgressUpdate = currentProgress;
-    }
+        // Store chunk data
+        fileData.chunks.push(data.data);
+        fileData.receivedSize += data.data.byteLength;
 
-    // If all chunks received, assemble file immediately
-    if (fileData.receivedSize >= fileData.fileSize) {
-        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-        saveFile(blob, fileData.fileName);
-        delete fileChunks[data.fileId];
-        elements.transferProgress.classList.add('hidden');
+        // Update progress
+        const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+        if (currentProgress - fileData.lastProgressUpdate >= 1) {
+            updateProgress(currentProgress);
+            fileData.lastProgressUpdate = currentProgress;
+            console.log(`Progress: ${currentProgress.toFixed(2)}%`);
+        }
+
+        // Update transfer state
+        const transfer = transferState.activeTransfers.get(data.fileId);
+        if (transfer) {
+            transfer.receivedSize = fileData.receivedSize;
+            transfer.progress = currentProgress;
+        }
+
+    } catch (error) {
+        console.error('Error handling file chunk:', error);
+        // Only show notification for unexpected errors
+        if (error.message !== 'Invalid file data') {
+            showNotification('Error processing file chunk', 'error');
+        }
     }
 }
 
 // Handle file completion
 async function handleFileComplete(data) {
-    const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
-
     try {
-        // Combine chunks into blob if this is a blob transfer
-        if (fileData.chunks.length > 0) {
-            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-            
-            // Verify file size
-            if (blob.size !== fileData.fileSize) {
-                throw new Error('Received file size does not match expected size');
-            }
-
-            // Create download URL and trigger download
-            downloadBlob(blob, fileData.fileName);
-            showNotification(`Downloaded ${fileData.fileName}`, 'success');
+        const fileData = fileChunks[data.fileId];
+        if (!fileData || !fileData.chunks) {
+            throw new Error('Invalid file data');
         }
 
-        // Create file info object
-        const fileInfo = {
-            name: fileData.fileName,
-            type: fileData.fileType,
-            size: fileData.fileSize,
+        console.log('File transfer complete:', data.fileName);
+        console.log('Chunks received:', fileData.chunks.length);
+        console.log('Total size:', fileData.receivedSize);
+
+        // Create blob from chunks
+        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+        
+        // Verify file size
+        if (blob.size !== fileData.fileSize) {
+            throw new Error(`File size mismatch. Expected: ${fileData.fileSize}, Got: ${blob.size}`);
+        }
+
+        // Save file
+        saveFile(blob, fileData.fileName);
+
+        // Update UI
+        updateProgress(100);
+        elements.transferProgress.classList.add('hidden');
+        showNotification(`File ${fileData.fileName} downloaded successfully!`, 'success');
+
+        // Clean up
+        delete fileChunks[data.fileId];
+        transferState.activeTransfers.delete(data.fileId);
+
+        // Add to history
+        addFileToHistory({
             id: data.fileId,
-            sharedBy: fileData.originalSender
-        };
-
-        // Add to history if this is a new file info
-        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-            addFileToHistory(fileInfo, 'received');
-
-            // If this is the host peer, forward the file info to other connected peers
-            if (connections.size > 1) {
-                console.log('Forwarding file info to other peers as host');
-                await forwardFileInfoToPeers(fileInfo, data.fileId);
-            }
-        }
+            name: data.fileName,
+            size: data.fileSize,
+            type: data.fileType
+        }, 'received');
 
     } catch (error) {
-        console.error('Error handling file completion:', error);
-        showNotification('Error processing file: ' + error.message, 'error');
-    } finally {
+        console.error('Error completing file transfer:', error);
+        showNotification(`Error completing file transfer: ${error.message}`, 'error');
+        
+        // Clean up on error
         delete fileChunks[data.fileId];
+        transferState.activeTransfers.delete(data.fileId);
         elements.transferProgress.classList.add('hidden');
-        updateProgress(0);
-        updateTransferInfo('');
     }
 }
 
@@ -1723,6 +1750,32 @@ async function assembleFile(fileId) {
         console.error('Error assembling file:', error);
         showError(`Failed to assemble file: ${error.message}`);
     }
+}
+
+// Update saveFile function for better error handling
+function saveFile(blob, fileName) {
+    try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (error) {
+        console.error('Error saving file:', error);
+        showNotification('Error saving file', 'error');
+    }
+}
+
+// Helper function to validate chunk data
+function validateChunkData(data) {
+    return data && 
+           typeof data.fileId === 'string' && 
+           data.data instanceof ArrayBuffer &&
+           typeof data.offset === 'number';
 }
 
 init();

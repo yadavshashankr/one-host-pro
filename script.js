@@ -94,6 +94,9 @@ const transferState = {
 // Add connection type tracking
 const connectionTypes = new Map(); // Tracks if connection is direct or via host
 
+// Add notification debouncing
+const notificationDebounce = new Map();
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -417,6 +420,12 @@ function setupConnectionHandlers(conn) {
                 }
             }
 
+            // Validate data has a type
+            if (!data || !data.type) {
+                console.error('Invalid data received:', data);
+                return;
+            }
+
             console.log('Received data type:', data.type, 'from:', conn.peer);
 
             switch (data.type) {
@@ -447,11 +456,18 @@ function setupConnectionHandlers(conn) {
 
                 case 'file-info':
                     console.log('Received file info:', data);
+                    // Validate required fields
+                    if (!data.fileId || !data.fileName || !data.fileSize || !data.senderId) {
+                        console.error('Invalid file info:', data);
+                        return;
+                    }
+                    
                     // Add file to list if we're the target or it's a broadcast
                     if (!data.targetPeerId || data.targetPeerId === peer.id) {
                         addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
                         showNotification(`New file available: ${data.fileName}`, 'info');
                     }
+                    
                     // Forward if we're the host
                     if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
                         const targetConn = connections.get(data.targetPeerId);
@@ -462,23 +478,18 @@ function setupConnectionHandlers(conn) {
                     break;
 
                 case 'file-chunk':
-                    console.log('Received file chunk:', { 
-                        fileId: data.fileId, 
-                        offset: data.offset, 
-                        size: data.data.byteLength 
-                    });
-                    showNotification(`Receiving file chunk: ${Math.round((data.offset / data.total) * 100)}%`, 'info');
-                    // Process chunk...
+                    // Only show progress every 10% to reduce notification spam
+                    const progress = Math.round((data.offset / data.total) * 100);
+                    if (progress % 10 === 0) {
+                        showNotification(`Receiving ${data.fileName}: ${progress}%`, 'info');
+                    }
                     break;
 
                 case 'file-complete':
-                    console.log('File transfer complete:', data.fileName);
                     showNotification(`File received: ${data.fileName}`, 'success');
-                    // Process completion...
                     break;
 
                 case 'file-error':
-                    console.error('File transfer error:', data.error);
                     showNotification(`File transfer error: ${data.error}`, 'error');
                     break;
 
@@ -528,6 +539,7 @@ function setupConnectionHandlers(conn) {
 
                 default:
                     console.warn('Unknown data type:', data.type);
+                    break;
             }
         } catch (error) {
             console.error('Error processing data:', error);
@@ -1124,6 +1136,12 @@ function addFileToList(fileId, fileName, fileSize, senderId) {
 
     fileList.appendChild(fileElement);
     console.log('File added to list:', fileId);
+
+    // Make sure the file list container is visible
+    const fileListContainer = document.getElementById('receivedFiles');
+    if (fileListContainer) {
+        fileListContainer.classList.remove('hidden');
+    }
 }
 
 function formatFileSize(bytes) {
@@ -1140,25 +1158,45 @@ function formatFileSize(bytes) {
 }
 
 function showNotification(message, type = 'info') {
+    // Generate a key for this notification
+    const key = `${type}-${message}`;
+    
+    // Check if we've shown this notification recently
+    const lastShown = notificationDebounce.get(key);
+    const now = Date.now();
+    if (lastShown && (now - lastShown) < 2000) { // Prevent duplicate within 2 seconds
+        return;
+    }
+    
+    // Update last shown time
+    notificationDebounce.set(key, now);
+    
+    // Clean up old entries
+    for (const [key, time] of notificationDebounce.entries()) {
+        if (now - time > 5000) {
+            notificationDebounce.delete(key);
+        }
+    }
+    
     console.log(`Notification (${type}):`, message);
     
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
     
-    // Add progress bar for auto-dismiss
     const progress = document.createElement('div');
     progress.className = 'notification-progress';
     notification.appendChild(progress);
     
-    document.getElementById('notifications').appendChild(notification);
+    const container = document.getElementById('notifications');
+    if (!container) return;
     
-    // Animate progress bar
+    container.appendChild(notification);
+    
     progress.style.width = '100%';
     progress.style.transition = 'width 5s linear';
     setTimeout(() => progress.style.width = '0%', 0);
     
-    // Auto-dismiss after 5 seconds
     setTimeout(() => {
         notification.classList.add('fade-out');
         setTimeout(() => notification.remove(), 300);
@@ -1715,15 +1753,20 @@ function shareFile(file, targetPeerId = null) {
         if (conn.open) {
             try {
                 console.log('Sending file info to peer:', conn.peer);
-                conn.send(JSON.stringify(fileInfo));  // Explicitly stringify the data
+                conn.send(JSON.stringify(fileInfo));
                 sentCount++;
             } catch (error) {
                 console.error('Error sending file info to peer:', conn.peer, error);
+                showNotification(`Failed to send file info to peer: ${conn.peer}`, 'error');
             }
         }
     });
     
-    console.log(`File info sent to ${sentCount} peers`);
+    if (sentCount === 0) {
+        showNotification('No connected peers to share with', 'warning');
+    } else {
+        console.log(`File info sent to ${sentCount} peers`);
+    }
 }
 
 // Update file status tracking

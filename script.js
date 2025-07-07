@@ -457,7 +457,7 @@ function setupConnectionHandlers(conn) {
                         console.error('Invalid file info received:', data);
                         return;
                     }
-                    addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId, false);
+                    addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
                     showNotification(`New file available: ${data.fileName}`, 'info');
                     break;
 
@@ -1076,57 +1076,30 @@ function updateProgress(percent) {
 }
 
 // UI Functions
-function addFileToList(fileId, fileName, fileSize, senderId, isSender = false) {
-    console.log('Adding file to list:', { fileId, fileName, fileSize, senderId, isSender });
+function addFileToList(fileId, fileName, fileSize, senderId) {
+    console.log('Adding file to list:', { fileId, fileName, fileSize, senderId });
 
-    // Create file list if it doesn't exist
-    if (!elements.fileList) {
-        const fileList = document.createElement('div');
-        fileList.id = 'fileList';
-        document.body.appendChild(fileList);
-        elements.fileList = fileList;
-    }
-
-    // Check if file already exists
-    const existingFile = document.querySelector(`[data-file-id="${fileId}"]`);
-    if (existingFile) {
-        console.log('File already in list:', fileId);
-        return;
-    }
-
-    const fileElement = document.createElement('div');
-    fileElement.className = 'file-item';
-    fileElement.dataset.fileId = fileId;
-
-    const nameElement = document.createElement('span');
-    nameElement.className = 'file-name';
-    nameElement.textContent = fileName;
-
-    const sizeElement = document.createElement('span');
-    sizeElement.className = 'file-size';
-    sizeElement.textContent = formatFileSize(fileSize);
-
-    const statusElement = document.createElement('span');
-    statusElement.className = 'file-status';
-    statusElement.textContent = isSender ? 'Shared' : 'Available';
-
-    const actionButton = document.createElement('button');
-    if (isSender) {
-        actionButton.textContent = 'Shared';
-        actionButton.disabled = true;
-    } else {
-        actionButton.textContent = 'Download';
-        actionButton.onclick = () => requestBlob(fileId, fileName, senderId);
-    }
-
-    fileElement.appendChild(nameElement);
-    fileElement.appendChild(sizeElement);
-    fileElement.appendChild(statusElement);
-    fileElement.appendChild(actionButton);
-
-    elements.fileList.appendChild(fileElement);
-    elements.fileList.classList.remove('hidden');
+    // Create list item
+    const li = document.createElement('li');
     
+    // Create name and size span
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = `${fileName} (${formatFileSize(fileSize)})`;
+    
+    // Create download button
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'button';
+    downloadBtn.textContent = 'Download';
+    downloadBtn.onclick = () => requestBlob(fileId, fileName, senderId);
+    
+    // Assemble list item
+    li.appendChild(nameSpan);
+    li.appendChild(downloadBtn);
+    
+    // Add to existing file list
+    elements.fileList.appendChild(li);
+    
+    // Show received files section
     if (elements.receivedFiles) {
         elements.receivedFiles.classList.remove('hidden');
     }
@@ -1737,8 +1710,6 @@ function shareFile(file) {
         timestamp: Date.now()
     };
 
-    // Add to our own list
-    addFileToList(fileId, file.name, file.size, peer.id, true);
     showNotification(`Sharing file: ${file.name}`, 'info');
 
     // Send to all connected peers

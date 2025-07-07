@@ -401,16 +401,16 @@ function setupConnectionHandlers(conn) {
         elements.fileTransferSection.classList.remove('hidden');
         
         // Send initial connection notification
-        conn.send({
+        conn.send(JSON.stringify({
             type: 'connection-notification',
             peerId: peer.id,
             isHost: isHost
-        });
+        }));
     });
 
     conn.on('data', async (data) => {
         try {
-            // Ensure data is properly parsed
+            // Parse data if it's a string
             if (typeof data === 'string') {
                 try {
                     data = JSON.parse(data);
@@ -420,20 +420,18 @@ function setupConnectionHandlers(conn) {
                 }
             }
 
-            // Validate data has a type
+            console.log('Received data:', data);
+
             if (!data || !data.type) {
                 console.error('Invalid data received:', data);
                 return;
             }
-
-            console.log('Received data type:', data.type, 'from:', conn.peer);
 
             switch (data.type) {
                 case 'connection-notification':
                     console.log('Connection notification from:', conn.peer);
                     if (data.isHost) {
                         hostId = conn.peer;
-                        console.log('Connected to host:', hostId);
                     }
                     updateConnectionStatus('connected');
                     showNotification(`Connected to peer: ${conn.peer}`, 'success');
@@ -448,7 +446,6 @@ function setupConnectionHandlers(conn) {
                     console.log('Connection acknowledged by:', conn.peer);
                     if (data.isHost) {
                         hostId = conn.peer;
-                        console.log('Connected to host:', hostId);
                     }
                     updateConnectionStatus('connected');
                     showNotification(`Connection acknowledged by: ${conn.peer}`, 'success');
@@ -456,25 +453,12 @@ function setupConnectionHandlers(conn) {
 
                 case 'file-info':
                     console.log('Received file info:', data);
-                    // Validate required fields
-                    if (!data.fileId || !data.fileName || !data.fileSize || !data.senderId) {
-                        console.error('Invalid file info:', data);
+                    if (!data.fileId || !data.fileName || !data.fileSize) {
+                        console.error('Invalid file info received:', data);
                         return;
                     }
-                    
-                    // Add file to list if we're the target or it's a broadcast
-                    if (!data.targetPeerId || data.targetPeerId === peer.id) {
-                        addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
-                        showNotification(`New file available: ${data.fileName}`, 'info');
-                    }
-                    
-                    // Forward if we're the host
-                    if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
-                        const targetConn = connections.get(data.targetPeerId);
-                        if (targetConn && targetConn.open) {
-                            targetConn.send(JSON.stringify(data));
-                        }
-                    }
+                    addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId, false);
+                    showNotification(`New file available: ${data.fileName}`, 'info');
                     break;
 
                 case 'file-chunk':
@@ -542,7 +526,7 @@ function setupConnectionHandlers(conn) {
                     break;
             }
         } catch (error) {
-            console.error('Error processing data:', error);
+            console.error('Error processing received data:', error);
             showNotification(`Error processing data: ${error.message}`, 'error');
         }
     });
@@ -551,8 +535,7 @@ function setupConnectionHandlers(conn) {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
         updateConnectionStatus(
-            connections.size > 0 ? 'connected' : 'disconnected',
-            connections.size > 0 ? '' : 'Disconnected'
+            connections.size > 0 ? 'connected' : 'disconnected'
         );
         showNotification(`Peer ${conn.peer} disconnected`, 'warning');
     });
@@ -1093,16 +1076,18 @@ function updateProgress(percent) {
 }
 
 // UI Functions
-function addFileToList(fileId, fileName, fileSize, senderId) {
-    console.log('Adding file to list:', { fileId, fileName, fileSize, senderId });
-    
-    const fileList = document.getElementById('fileList');
-    if (!fileList) {
-        console.error('File list element not found');
-        return;
+function addFileToList(fileId, fileName, fileSize, senderId, isSender = false) {
+    console.log('Adding file to list:', { fileId, fileName, fileSize, senderId, isSender });
+
+    // Create file list if it doesn't exist
+    if (!elements.fileList) {
+        const fileList = document.createElement('div');
+        fileList.id = 'fileList';
+        document.body.appendChild(fileList);
+        elements.fileList = fileList;
     }
 
-    // Check if file already exists in list
+    // Check if file already exists
     const existingFile = document.querySelector(`[data-file-id="${fileId}"]`);
     if (existingFile) {
         console.log('File already in list:', fileId);
@@ -1123,25 +1108,30 @@ function addFileToList(fileId, fileName, fileSize, senderId) {
 
     const statusElement = document.createElement('span');
     statusElement.className = 'file-status';
-    statusElement.textContent = 'Available';
+    statusElement.textContent = isSender ? 'Shared' : 'Available';
 
-    const downloadButton = document.createElement('button');
-    downloadButton.textContent = 'Download';
-    downloadButton.onclick = () => requestBlob(fileId, fileName, senderId);
+    const actionButton = document.createElement('button');
+    if (isSender) {
+        actionButton.textContent = 'Shared';
+        actionButton.disabled = true;
+    } else {
+        actionButton.textContent = 'Download';
+        actionButton.onclick = () => requestBlob(fileId, fileName, senderId);
+    }
 
     fileElement.appendChild(nameElement);
     fileElement.appendChild(sizeElement);
     fileElement.appendChild(statusElement);
-    fileElement.appendChild(downloadButton);
+    fileElement.appendChild(actionButton);
 
-    fileList.appendChild(fileElement);
-    console.log('File added to list:', fileId);
-
-    // Make sure the file list container is visible
-    const fileListContainer = document.getElementById('receivedFiles');
-    if (fileListContainer) {
-        fileListContainer.classList.remove('hidden');
+    elements.fileList.appendChild(fileElement);
+    elements.fileList.classList.remove('hidden');
+    
+    if (elements.receivedFiles) {
+        elements.receivedFiles.classList.remove('hidden');
     }
+
+    console.log('File added to list successfully:', fileId);
 }
 
 function formatFileSize(bytes) {
@@ -1725,9 +1715,14 @@ function validateChunkData(data) {
 }
 
 // Update file sharing functions
-function shareFile(file, targetPeerId = null) {
+function shareFile(file) {
+    if (!file || !connections.size) {
+        showNotification('No peers connected to share files with', 'warning');
+        return;
+    }
+
     const fileId = generateFileId();
-    console.log('Sharing file:', { name: file.name, size: file.size, id: fileId, target: targetPeerId });
+    console.log('Sharing file:', { name: file.name, size: file.size, id: fileId });
 
     // Store the file blob
     sentFileBlobs.set(fileId, file);
@@ -1739,15 +1734,14 @@ function shareFile(file, targetPeerId = null) {
         fileName: file.name,
         fileSize: file.size,
         senderId: peer.id,
-        targetPeerId: targetPeerId,
         timestamp: Date.now()
     };
 
-    // Add to our own list first
-    addFileToList(fileId, file.name, file.size, peer.id);
+    // Add to our own list
+    addFileToList(fileId, file.name, file.size, peer.id, true);
     showNotification(`Sharing file: ${file.name}`, 'info');
 
-    // Send to connected peers
+    // Send to all connected peers
     let sentCount = 0;
     connections.forEach(conn => {
         if (conn.open) {
@@ -1757,16 +1751,11 @@ function shareFile(file, targetPeerId = null) {
                 sentCount++;
             } catch (error) {
                 console.error('Error sending file info to peer:', conn.peer, error);
-                showNotification(`Failed to send file info to peer: ${conn.peer}`, 'error');
             }
         }
     });
-    
-    if (sentCount === 0) {
-        showNotification('No connected peers to share with', 'warning');
-    } else {
-        console.log(`File info sent to ${sentCount} peers`);
-    }
+
+    console.log(`File info sent to ${sentCount} peers`);
 }
 
 // Update file status tracking

@@ -407,8 +407,14 @@ function setupConnectionHandlers(conn) {
 
     conn.on('data', async (data) => {
         try {
+            // Ensure data is properly parsed
             if (typeof data === 'string') {
-                data = JSON.parse(data);
+                try {
+                    data = JSON.parse(data);
+                } catch (error) {
+                    console.error('Error parsing data:', error);
+                    return;
+                }
             }
 
             console.log('Received data type:', data.type, 'from:', conn.peer);
@@ -421,11 +427,12 @@ function setupConnectionHandlers(conn) {
                         console.log('Connected to host:', hostId);
                     }
                     updateConnectionStatus('connected');
-                    conn.send({
+                    showNotification(`Connected to peer: ${conn.peer}`, 'success');
+                    conn.send(JSON.stringify({
                         type: 'connection-ack',
                         peerId: peer.id,
                         isHost: isHost
-                    });
+                    }));
                     break;
 
                 case 'connection-ack':
@@ -435,6 +442,44 @@ function setupConnectionHandlers(conn) {
                         console.log('Connected to host:', hostId);
                     }
                     updateConnectionStatus('connected');
+                    showNotification(`Connection acknowledged by: ${conn.peer}`, 'success');
+                    break;
+
+                case 'file-info':
+                    console.log('Received file info:', data);
+                    // Add file to list if we're the target or it's a broadcast
+                    if (!data.targetPeerId || data.targetPeerId === peer.id) {
+                        addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
+                        showNotification(`New file available: ${data.fileName}`, 'info');
+                    }
+                    // Forward if we're the host
+                    if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
+                        const targetConn = connections.get(data.targetPeerId);
+                        if (targetConn && targetConn.open) {
+                            targetConn.send(JSON.stringify(data));
+                        }
+                    }
+                    break;
+
+                case 'file-chunk':
+                    console.log('Received file chunk:', { 
+                        fileId: data.fileId, 
+                        offset: data.offset, 
+                        size: data.data.byteLength 
+                    });
+                    showNotification(`Receiving file chunk: ${Math.round((data.offset / data.total) * 100)}%`, 'info');
+                    // Process chunk...
+                    break;
+
+                case 'file-complete':
+                    console.log('File transfer complete:', data.fileName);
+                    showNotification(`File received: ${data.fileName}`, 'success');
+                    // Process completion...
+                    break;
+
+                case 'file-error':
+                    console.error('File transfer error:', data.error);
+                    showNotification(`File transfer error: ${data.error}`, 'error');
                     break;
 
                 case 'keep-alive':
@@ -462,59 +507,8 @@ function setupConnectionHandlers(conn) {
                     showNotification(`Peer ${conn.peer} disconnected`, 'warning');
                     break;
 
-                case 'file-info':
-                    console.log('Received file info:', data);
-                    // Add file to the list if we're the host or it's meant for us
-                    if (isHost || data.targetPeerId === peer.id) {
-                        addFileToList(data.fileId, data.fileName, data.fileSize, data.senderId);
-                    }
-                    // Forward file info if we're the host
-                    if (isHost && data.targetPeerId && data.targetPeerId !== peer.id) {
-                        const targetConn = connections.get(data.targetPeerId);
-                        if (targetConn && targetConn.open) {
-                            targetConn.send(data);
-                        }
-                    }
-                    break;
-
                 case 'file-header':
                     await handleFileHeader(data);
-                    break;
-
-                case 'file-chunk':
-                    await handleFileChunk(data);
-                    break;
-
-                case 'file-complete':
-                    await handleFileComplete(data);
-                    break;
-
-                case 'blob-request':
-                    // Handle direct blob request
-                    await handleBlobRequest(data, conn);
-                    break;
-
-                case 'blob-request-forward':
-                    // Handle forwarded blob request (host only)
-                    if (isHost) {
-                        await handleForwardedBlobRequest(data, conn);
-                    } else {
-                        console.warn('Non-host received forwarded request');
-                    }
-                    break;
-
-                case 'blob-error':
-                    console.error('Blob error:', data.error);
-                    showNotification(`Failed to download file: ${data.error}`, 'error');
-                    elements.transferProgress.classList.add('hidden');
-                    updateTransferInfo('');
-                    
-                    // Reset UI
-                    const downloadButton = document.querySelector(`[data-file-id="${data.fileId}"]`);
-                    if (downloadButton) {
-                        downloadButton.disabled = false;
-                        downloadButton.textContent = 'Retry Download';
-                    }
                     break;
 
                 case 'file-update':
@@ -537,9 +531,7 @@ function setupConnectionHandlers(conn) {
             }
         } catch (error) {
             console.error('Error processing data:', error);
-            if (!error.message.includes('Invalid file data')) {
-                showNotification('Error processing data', 'error');
-            }
+            showNotification(`Error processing data: ${error.message}`, 'error');
         }
     });
 
@@ -1148,14 +1140,28 @@ function formatFileSize(bytes) {
 }
 
 function showNotification(message, type = 'info') {
+    console.log(`Notification (${type}):`, message);
+    
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
-    notification.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
+    notification.textContent = message;
     
-    elements.notifications.appendChild(notification);
+    // Add progress bar for auto-dismiss
+    const progress = document.createElement('div');
+    progress.className = 'notification-progress';
+    notification.appendChild(progress);
     
+    document.getElementById('notifications').appendChild(notification);
+    
+    // Animate progress bar
+    progress.style.width = '100%';
+    progress.style.transition = 'width 5s linear';
+    setTimeout(() => progress.style.width = '0%', 0);
+    
+    // Auto-dismiss after 5 seconds
     setTimeout(() => {
-        notification.remove();
+        notification.classList.add('fade-out');
+        setTimeout(() => notification.remove(), 300);
     }, 5000);
 }
 
@@ -1695,19 +1701,29 @@ function shareFile(file, targetPeerId = null) {
         fileName: file.name,
         fileSize: file.size,
         senderId: peer.id,
-        targetPeerId: targetPeerId
+        targetPeerId: targetPeerId,
+        timestamp: Date.now()
     };
 
     // Add to our own list first
     addFileToList(fileId, file.name, file.size, peer.id);
+    showNotification(`Sharing file: ${file.name}`, 'info');
 
     // Send to connected peers
+    let sentCount = 0;
     connections.forEach(conn => {
         if (conn.open) {
-            console.log('Sending file info to peer:', conn.peer);
-            conn.send(fileInfo);
+            try {
+                console.log('Sending file info to peer:', conn.peer);
+                conn.send(JSON.stringify(fileInfo));  // Explicitly stringify the data
+                sentCount++;
+            } catch (error) {
+                console.error('Error sending file info to peer:', conn.peer, error);
+            }
         }
     });
+    
+    console.log(`File info sent to ${sentCount} peers`);
 }
 
 // Update file status tracking
@@ -1723,5 +1739,22 @@ function updateFileStatus(fileId, status, progress = 0) {
         }
     }
 }
+
+// Add cache clearing on page load
+window.addEventListener('load', () => {
+    // Clear caches
+    sentFileBlobs.clear();
+    receivedFileBlobs.clear();
+    connections.clear();
+    connectionTypes.clear();
+    transferState.activeTransfers.clear();
+    transferState.pendingTransfers.clear();
+    
+    // Clear file list UI
+    const fileList = document.getElementById('fileList');
+    if (fileList) {
+        fileList.innerHTML = '';
+    }
+});
 
 init();

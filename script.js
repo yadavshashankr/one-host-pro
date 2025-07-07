@@ -328,19 +328,92 @@ function initPeerJS() {
     }
 }
 
-// Setup connection event handlers
+// Update connect function for better connection handling
+async function connect(peerId) {
+    try {
+        if (connections.has(peerId)) {
+            const existingConn = connections.get(peerId);
+            if (existingConn.open) {
+                console.log('Using existing connection to:', peerId);
+                return existingConn;
+            }
+            // Clean up dead connection
+            console.log('Cleaning up dead connection to:', peerId);
+            connections.delete(peerId);
+        }
+
+        console.log('Establishing new connection to:', peerId);
+        updateConnectionStatus('connecting', 'Connecting...');
+
+        const conn = peer.connect(peerId, {
+            reliable: true,
+            serialization: 'binary'
+        });
+
+        return await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+            }, CONNECTION_TIMEOUT);
+
+            conn.on('open', () => {
+                clearTimeout(timeout);
+                console.log('Connection established with:', peerId);
+                connections.set(peerId, conn);
+                setupConnectionHandlers(conn);
+                updateConnectionStatus('connected', `Connected to peer: ${peerId}`);
+                resolve(conn);
+            });
+
+            conn.on('error', (err) => {
+                clearTimeout(timeout);
+                console.error('Connection error:', err);
+                reject(err);
+            });
+        });
+    } catch (error) {
+        console.error('Connection failed:', error);
+        updateConnectionStatus('error', `Connection failed: ${error.message}`);
+        throw error;
+    }
+}
+
+// Update setupConnectionHandlers for better connection management
 function setupConnectionHandlers(conn) {
+    conn.on('open', () => {
+        console.log('Connection opened with:', conn.peer);
+        connections.set(conn.peer, conn);
+        updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
+        elements.fileTransferSection.classList.remove('hidden');
+        
+        // Send initial connection notification
+        conn.send({
+            type: 'connection-notification',
+            peerId: peer.id
+        });
+    });
+
     conn.on('data', async (data) => {
         try {
             if (typeof data === 'string') {
                 data = JSON.parse(data);
             }
 
-            console.log('Received data:', data.type);
+            console.log('Received data type:', data.type, 'from:', conn.peer);
 
             switch (data.type) {
                 case 'connection-notification':
-                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    console.log('Connection notification from:', conn.peer);
+                    updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
+                    // Send acknowledgment
+                    conn.send({
+                        type: 'connection-ack',
+                        peerId: peer.id
+                    });
+                    break;
+
+                case 'connection-ack':
+                    console.log('Connection acknowledged by:', conn.peer);
+                    updateConnectionStatus('connected', `Connected to peer: ${conn.peer}`);
                     break;
 
                 case 'keep-alive':
@@ -426,19 +499,26 @@ function setupConnectionHandlers(conn) {
                     console.warn('Unknown data type:', data.type);
             }
         } catch (error) {
-            console.error('Error processing received data:', error);
-            // Don't show error notification for expected processing errors
-            if (error.message !== 'Invalid file data' && error.message !== 'File transfer already completed') {
-                showNotification('Error processing received data', 'error');
+            console.error('Error processing data:', error);
+            if (!error.message.includes('Invalid file data')) {
+                showNotification('Error processing data', 'error');
             }
         }
     });
 
     conn.on('close', () => {
-        console.log('Connection closed with peer:', conn.peer);
+        console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
-        updateConnectionStatus('',
-            connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+        updateConnectionStatus(
+            connections.size > 0 ? 'connected' : 'disconnected',
+            connections.size > 0 ? `Connected to ${connections.size} peer(s)` : 'Disconnected'
+        );
+        showNotification(`Peer ${conn.peer} disconnected`, 'warning');
+    });
+
+    conn.on('error', (error) => {
+        console.error('Connection error with:', conn.peer, error);
+        showNotification(`Connection error with peer ${conn.peer}`, 'error');
     });
 }
 
@@ -606,123 +686,6 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     } catch (error) {
         console.error(`Error sending file info to peer ${conn.peer}:`, error);
         throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
-    }
-}
-
-// Update handleBlobRequest for faster direct transfers
-async function handleBlobRequest(data, conn) {
-    const { fileId, forwardTo } = data;
-    console.log('Received blob request for file:', fileId);
-
-    // Check if we have the blob
-    const blob = sentFileBlobs.get(fileId);
-    if (!blob) {
-        console.error('Blob not found for file:', fileId);
-        if (conn.open) {
-            conn.send({
-                type: 'blob-error',
-                fileId: fileId,
-                error: 'File not available'
-            });
-        }
-        return;
-    }
-
-    try {
-        // Convert blob to array buffer
-        const buffer = await blob.arrayBuffer();
-        let offset = 0;
-        let lastProgressUpdate = 0;
-
-        // If this is a forwarded request, send to the correct peer
-        const targetConn = forwardTo ? connections.get(forwardTo) : conn;
-        if (forwardTo && (!targetConn || !targetConn.open)) {
-            throw new Error('Requester no longer connected');
-        }
-
-        const sendToConn = targetConn || conn;
-
-        // Track this transfer
-        transferState.activeTransfers.set(fileId, {
-            conn: sendToConn,
-            startTime: Date.now(),
-            size: blob.size,
-            progress: 0
-        });
-
-        // Send file header
-        sendToConn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            originalSender: peer.id
-        });
-
-        // Send chunks with minimal delay for direct transfers
-        while (offset < blob.size) {
-            if (!sendToConn.open) {
-                throw new Error('Connection lost during transfer');
-            }
-
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-            
-            sendToConn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: chunk,
-                offset: offset,
-                total: blob.size
-            });
-
-            offset += chunk.byteLength;
-
-            // Update progress
-            const currentProgress = (offset / blob.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
-                lastProgressUpdate = currentProgress;
-
-                // Update transfer state
-                const transfer = transferState.activeTransfers.get(fileId);
-                if (transfer) {
-                    transfer.progress = currentProgress;
-                }
-            }
-
-            // Minimal delay for flow control
-            if (offset % (CHUNK_SIZE * 10) === 0) {
-                await new Promise(resolve => setTimeout(resolve, 1));
-            }
-        }
-
-        // Send completion message
-        if (sendToConn.open) {
-            sendToConn.send({
-                type: 'file-complete',
-                fileId: fileId,
-                fileName: data.fileName,
-                fileType: blob.type,
-                fileSize: blob.size
-            });
-        } else {
-            throw new Error('Connection lost before completion');
-        }
-
-        console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
-    } catch (error) {
-        console.error(`Error sending blob to peer:`, error);
-        if (conn.open) {
-            conn.send({
-                type: 'blob-error',
-                fileId: fileId,
-                error: error.message
-            });
-        }
-    } finally {
-        // Clean up transfer state
-        transferState.activeTransfers.delete(fileId);
     }
 }
 
@@ -1173,30 +1136,22 @@ elements.copyId.addEventListener('click', () => {
         .catch(err => showNotification('Failed to copy Peer ID', 'error'));
 });
 
-elements.connectButton.addEventListener('click', () => {
-    const remotePeerIdValue = elements.remotePeerId.value.trim();
-    if (!remotePeerIdValue) {
-        showNotification('Please enter a Peer ID', 'error');
-        return;
-    }
-
-    if (connections.has(remotePeerIdValue)) {
-        showNotification('Already connected to this peer', 'warning');
+elements.connectButton.addEventListener('click', async () => {
+    const remotePeerId = elements.remotePeerId.value.trim();
+    if (!remotePeerId) {
+        showNotification('Please enter a peer ID', 'error');
         return;
     }
 
     try {
-        console.log('Attempting to connect to:', remotePeerIdValue);
         updateConnectionStatus('connecting', 'Connecting...');
-        const newConnection = peer.connect(remotePeerIdValue, {
-            reliable: true
-        });
-        connections.set(remotePeerIdValue, newConnection);
-        setupConnectionHandlers(newConnection);
+        const conn = await connect(remotePeerId);
+        console.log('Connection successful:', conn.peer);
+        addRecentPeer(remotePeerId);
     } catch (error) {
-        console.error('Connection attempt error:', error);
-        showNotification('Failed to establish connection', 'error');
-        updateConnectionStatus('', 'Connection failed');
+        console.error('Connection failed:', error);
+        updateConnectionStatus('error', `Connection failed: ${error.message}`);
+        showNotification(`Failed to connect: ${error.message}`, 'error');
     }
 });
 
@@ -1306,16 +1261,22 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-// Add function to update connection status
+// Update updateConnectionStatus for better status display
 function updateConnectionStatus(status, message) {
-    elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
+    elements.statusDot.className = `status-dot ${status}`;
+    elements.statusText.textContent = message;
     
-    // Update title to show number of connections
-    if (connections && connections.size > 0) {
-        document.title = `(${connections.size}) One-Host`;
+    // Update UI based on connection status
+    if (status === 'connected') {
+        elements.fileTransferSection.classList.remove('hidden');
+        elements.connectButton.disabled = false;
+        elements.connectButton.textContent = 'Connect';
+    } else if (status === 'connecting') {
+        elements.connectButton.disabled = true;
+        elements.connectButton.textContent = 'Connecting...';
     } else {
-        document.title = 'One-Host';
+        elements.connectButton.disabled = false;
+        elements.connectButton.textContent = 'Connect';
     }
 }
 
@@ -1557,131 +1518,6 @@ function downloadBlob(blob, fileName) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 100);
-}
-
-// Update connect function to prioritize direct connections
-async function connect(peerId) {
-    try {
-        if (connections.has(peerId)) {
-            const existingConn = connections.get(peerId);
-            if (existingConn.open) {
-                return existingConn;
-            }
-            // Clean up dead connection
-            connections.delete(peerId);
-            connectionTypes.delete(peerId);
-        }
-
-        console.log('Establishing direct connection to peer:', peerId);
-        const conn = peer.connect(peerId, {
-            reliable: true,
-            serialization: 'binary',
-            // Optimize DataChannel for large files
-            dataChannelConfig: {
-                ordered: true,
-                maxRetransmits: 3,
-                maxPacketLifeTime: 3000
-            }
-        });
-
-        return await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Direct connection timeout'));
-            }, 10000); // 10 second timeout for LAN
-
-            conn.on('open', () => {
-                clearTimeout(timeout);
-                console.log('Direct connection established with:', peerId);
-                connections.set(peerId, conn);
-                connectionTypes.set(peerId, 'direct');
-                setupConnectionHandlers(conn);
-                
-                // Send connection type confirmation
-                conn.send({
-                    type: 'connection-type',
-                    connectionType: 'direct'
-                });
-                
-                resolve(conn);
-            });
-
-            conn.on('error', (err) => {
-                clearTimeout(timeout);
-                console.error('Direct connection error:', err);
-                reject(err);
-            });
-        });
-    } catch (error) {
-        console.error('Failed to establish direct connection:', error);
-        throw error; // Don't fall back to host - require direct connection
-    }
-}
-
-// Update requestBlob function to enforce direct transfers
-async function requestBlob(fileId, fileName, senderId) {
-    try {
-        console.log('Requesting blob:', fileId, 'from sender:', senderId);
-        
-        let targetConn;
-        if (senderId === hostId || connections.has(senderId)) {
-            // Direct connection to host or peer
-            targetConn = connections.get(senderId);
-        } else if (hostId && connections.has(hostId)) {
-            // Request through host
-            targetConn = connections.get(hostId);
-            console.log('Requesting through host');
-        } else {
-            throw new Error('No connection available');
-        }
-
-        if (!targetConn || !targetConn.open) {
-            throw new Error('Connection not available');
-        }
-
-        // Update UI
-        const downloadButton = document.querySelector(`[data-file-id="${fileId}"]`);
-        if (downloadButton) {
-            downloadButton.disabled = true;
-            downloadButton.textContent = 'Requesting...';
-        }
-
-        // Send appropriate request type
-        if (senderId === hostId || !hostId || senderId === targetConn.peer) {
-            // Direct request
-            targetConn.send({
-                type: 'blob-request',
-                fileId: fileId,
-                fileName: fileName
-            });
-        } else {
-            // Forwarded request
-            targetConn.send({
-                type: 'blob-request-forward',
-                fileId: fileId,
-                fileName: fileName,
-                originalSender: senderId,
-                requesterId: peer.id
-            });
-        }
-
-        // Add to pending transfers
-        transferState.pendingTransfers.set(fileId, {
-            senderId: senderId,
-            fileName: fileName,
-            startTime: Date.now()
-        });
-
-    } catch (error) {
-        console.error('Error requesting blob:', error);
-        showNotification(`Failed to request file: ${error.message}`, 'error');
-        
-        // Reset UI
-        const downloadButton = document.querySelector(`[data-file-id="${fileId}"]`);
-        if (downloadButton) {
-            downloadButton.disabled = false;
-            downloadButton.textContent = 'Retry Download';
-        }
-    }
 }
 
 // Function to detect if peers are on local network

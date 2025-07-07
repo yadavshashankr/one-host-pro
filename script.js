@@ -1,4 +1,5 @@
 // Constants
+const CHUNK_SIZE = 65536; // Increased to 64KB for faster transfers
 const DB_NAME = 'fileTransferDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
@@ -265,21 +266,13 @@ async function shareId() {
 function initPeerJS() {
     try {
         peer = new Peer({
-            host: 'localhost',
-            port: 9000,
+            debug: 2,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
-                    // Prioritize local network connections
-                    { urls: 'stun:stun1.l.google.com:19302' }
-                ],
-                iceTransportPolicy: 'all',
-                bundlePolicy: 'max-bundle',
-                rtcpMuxPolicy: 'require',
-                // Optimize for LAN
-                iceCandidatePoolSize: 2
-            },
-            debug: 3
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
         });
 
         peer.on('open', (id) => {
@@ -521,37 +514,25 @@ async function handleFileHeader(data) {
 
 // Handle file chunk
 async function handleFileChunk(data) {
-    try {
-        const { fileId, chunkData, offset, total } = data;
-        const transfer = transferState.activeTransfers.get(fileId);
-        
-        if (!transfer) {
-            console.error('No active transfer found for chunk:', fileId);
-            return;
-        }
+    const fileData = fileChunks[data.fileId];
+    if (!fileData) return;
 
-        // Store chunk
-        transfer.chunks.push({
-            data: data.data,
-            offset: offset
-        });
+    fileData.chunks.push(data.data);
+    fileData.receivedSize += data.data.byteLength;
+    
+    // Update progress more smoothly
+    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
+        updateProgress(currentProgress);
+        fileData.lastProgressUpdate = currentProgress;
+    }
 
-        // Update progress
-        const progress = (offset + data.data.byteLength) / total * 100;
-        updateProgress(progress);
-        
-        // Update transfer state
-        transfer.bytesReceived = offset + data.data.byteLength;
-        transfer.progress = progress;
-
-        // If this was the last chunk, assemble the file
-        if (transfer.bytesReceived >= total) {
-            await assembleFile(fileId);
-        }
-
-    } catch (error) {
-        console.error('Error handling chunk:', error);
-        showError(`Error processing file chunk: ${error.message}`);
+    // If all chunks received, assemble file immediately
+    if (fileData.receivedSize >= fileData.fileSize) {
+        const blob = new Blob(fileData.chunks, { type: fileData.fileType });
+        saveFile(blob, fileData.fileName);
+        delete fileChunks[data.fileId];
+        elements.transferProgress.classList.add('hidden');
     }
 }
 
@@ -650,80 +631,110 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
     }
 }
 
-// Update handleBlobRequest for optimized direct transfer
+// Update handleBlobRequest for faster direct transfers
 async function handleBlobRequest(data, conn) {
-    const { fileId, fileName } = data;
-    console.log('Handling direct blob request for:', fileId);
+    const { fileId, forwardTo } = data;
+    console.log('Received blob request for file:', fileId);
+
+    // Check if we have the blob
+    const blob = sentFileBlobs.get(fileId);
+    if (!blob) {
+        console.error('Blob not found for file:', fileId);
+        if (conn.open) {
+            conn.send({
+                type: 'blob-error',
+                fileId: fileId,
+                error: 'File not available'
+            });
+        }
+        return;
+    }
 
     try {
-        const blob = sentFileBlobs.get(fileId);
-        if (!blob) {
-            throw new Error('File not available');
-        }
-
-        // Send file header immediately
-        conn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            chunkSize: CHUNK_SIZE,
-            originalSender: peer.id
-        });
-
         // Convert blob to array buffer
         const buffer = await blob.arrayBuffer();
-        const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
         let offset = 0;
         let lastProgressUpdate = 0;
 
-        console.log(`Starting direct transfer: ${totalChunks} chunks of ${CHUNK_SIZE} bytes`);
+        // If this is a forwarded request, send to the correct peer
+        const targetConn = forwardTo ? connections.get(forwardTo) : conn;
+        if (forwardTo && (!targetConn || !targetConn.open)) {
+            throw new Error('Requester no longer connected');
+        }
 
-        // Send chunks with minimal delay
+        const sendToConn = targetConn || conn;
+
+        // Track this transfer
+        transferState.activeTransfers.set(fileId, {
+            conn: sendToConn,
+            startTime: Date.now(),
+            size: blob.size,
+            progress: 0
+        });
+
+        // Send file header
+        sendToConn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: data.fileName,
+            fileType: blob.type,
+            fileSize: blob.size,
+            originalSender: peer.id
+        });
+
+        // Send chunks with minimal delay for direct transfers
         while (offset < blob.size) {
-            if (!conn.open) {
+            if (!sendToConn.open) {
                 throw new Error('Connection lost during transfer');
             }
 
             const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
             
-            conn.send({
+            sendToConn.send({
                 type: 'file-chunk',
                 fileId: fileId,
                 data: chunk,
                 offset: offset,
-                total: blob.size,
-                chunkIndex: Math.floor(offset / CHUNK_SIZE),
-                totalChunks: totalChunks
+                total: blob.size
             });
 
             offset += chunk.byteLength;
 
-            // Update progress every 5%
+            // Update progress
             const currentProgress = (offset / blob.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 5) {
+            if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress);
                 lastProgressUpdate = currentProgress;
+
+                // Update transfer state
+                const transfer = transferState.activeTransfers.get(fileId);
+                if (transfer) {
+                    transfer.progress = currentProgress;
+                }
             }
 
-            // Minimal delay between chunks for flow control
-            await new Promise(resolve => setTimeout(resolve, 1));
+            // Minimal delay for flow control
+            if (offset % (CHUNK_SIZE * 10) === 0) {
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
         }
 
         // Send completion message
-        conn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: fileName,
-            fileType: blob.type,
-            fileSize: blob.size
-        });
+        if (sendToConn.open) {
+            sendToConn.send({
+                type: 'file-complete',
+                fileId: fileId,
+                fileName: data.fileName,
+                fileType: blob.type,
+                fileSize: blob.size
+            });
+        } else {
+            throw new Error('Connection lost before completion');
+        }
 
-        console.log('Direct transfer completed successfully');
-
+        console.log(`Blob sent successfully to peer ${sendToConn.peer}`);
     } catch (error) {
-        console.error('Error in direct transfer:', error);
+        console.error(`Error sending blob to peer:`, error);
         if (conn.open) {
             conn.send({
                 type: 'blob-error',
@@ -731,7 +742,9 @@ async function handleBlobRequest(data, conn) {
                 error: error.message
             });
         }
-        throw error;
+    } finally {
+        // Clean up transfer state
+        transferState.activeTransfers.delete(fileId);
     }
 }
 

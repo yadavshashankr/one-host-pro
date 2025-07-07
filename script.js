@@ -83,6 +83,9 @@ const transferState = {
     isProcessing: false
 };
 
+// Add connection type tracking
+const connectionTypes = new Map(); // Tracks if connection is direct or via host
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -333,61 +336,100 @@ function setupConnectionHandlers(conn) {
 
     conn.on('data', async (data) => {
         try {
-            if (data.type === 'connection-notification') {
-                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-            } else if (data.type === 'keep-alive') {
-                // Handle keep-alive message
-                console.log(`Keep-alive received from peer ${conn.peer}`);
-                // Send keep-alive response
-                conn.send({
-                    type: 'keep-alive-response',
-                    timestamp: Date.now(),
-                    peerId: peer.id
-                });
-            } else if (data.type === 'keep-alive-response') {
-                // Handle keep-alive response
-                console.log(`Keep-alive response received from peer ${conn.peer}`);
-            } else if (data.type === 'disconnect-notification') {
-                // Handle disconnect notification
-                console.log(`Disconnect notification received from peer ${conn.peer}`);
-                connections.delete(conn.peer);
-                updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                    connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-                showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-            } else if (data.type === 'file-info') {
-                // Handle file info without blob
-                const fileInfo = {
-                    name: data.fileName,
-                    type: data.fileType,
-                    size: data.fileSize,
-                    id: data.fileId,
-                    sharedBy: data.originalSender
-                };
-                // Add to history if not already present
-                if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-                    addFileToHistory(fileInfo, 'received');
-                    
-                    // If this is the host, forward to other peers
-                    if (connections.size > 1) {
-                        await forwardFileInfoToPeers(fileInfo, data.fileId);
+            if (typeof data === 'string') {
+                data = JSON.parse(data);
+            }
+
+            switch (data.type) {
+                case 'connection-notification':
+                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    break;
+                case 'keep-alive':
+                    // Handle keep-alive message
+                    console.log(`Keep-alive received from peer ${conn.peer}`);
+                    // Send keep-alive response
+                    conn.send({
+                        type: 'keep-alive-response',
+                        timestamp: Date.now(),
+                        peerId: peer.id
+                    });
+                    break;
+                case 'keep-alive-response':
+                    // Handle keep-alive response
+                    console.log(`Keep-alive response received from peer ${conn.peer}`);
+                    break;
+                case 'disconnect-notification':
+                    // Handle disconnect notification
+                    console.log(`Disconnect notification received from peer ${conn.peer}`);
+                    connections.delete(conn.peer);
+                    updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+                        connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+                    showNotification(`Peer ${conn.peer} disconnected`, 'warning');
+                    break;
+                case 'file-info':
+                    // Handle file info without blob
+                    const fileInfo = {
+                        name: data.fileName,
+                        type: data.fileType,
+                        size: data.fileSize,
+                        id: data.fileId,
+                        sharedBy: data.originalSender
+                    };
+                    // Add to history if not already present
+                    if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+                        addFileToHistory(fileInfo, 'received');
+                        
+                        // If this is the host, forward to other peers
+                        if (connections.size > 1) {
+                            await forwardFileInfoToPeers(fileInfo, data.fileId);
+                        }
                     }
-                }
-            } else if (data.type === 'file-header') {
-                await handleFileHeader(data);
-            } else if (data.type === 'file-chunk') {
-                await handleFileChunk(data);
-            } else if (data.type === 'file-complete') {
-                await handleFileComplete(data);
-            } else if (data.type === 'blob-request') {
-                // Handle direct blob request
-                await handleBlobRequest(data, conn);
-            } else if (data.type === 'blob-request-forwarded') {
-                // Handle forwarded blob request (host only)
-                await handleForwardedBlobRequest(data, conn);
-            } else if (data.type === 'blob-error') {
-                showNotification(`Failed to download file: ${data.error}`, 'error');
-                elements.transferProgress.classList.add('hidden');
-                updateTransferInfo('');
+                    break;
+                case 'file-header':
+                    await handleFileHeader(data);
+                    break;
+                case 'file-chunk':
+                    await handleFileChunk(data);
+                    break;
+                case 'file-complete':
+                    await handleFileComplete(data);
+                    break;
+                case 'blob-request':
+                case 'blob-request-forward':
+                    if (data.type === 'blob-request-forward' && !isHost) {
+                        console.error('Non-host received forwarded request');
+                        return;
+                    }
+
+                    const handler = data.type === 'blob-request' ? 
+                        handleBlobRequest : 
+                        handleForwardedBlobRequest;
+
+                    await handler(data, conn);
+                    break;
+                case 'blob-error':
+                    showNotification(`Failed to download file: ${data.error}`, 'error');
+                    elements.transferProgress.classList.add('hidden');
+                    updateTransferInfo('');
+                    break;
+                case 'connection-request':
+                    // Handle connection request forwarding
+                    if (isHost) {
+                        const targetConn = connections.get(data.targetPeerId);
+                        if (targetConn?.open) {
+                            targetConn.send({
+                                type: 'connection-info',
+                                requesterId: conn.peer
+                            });
+                        }
+                    }
+                    break;
+                case 'connection-info':
+                    // Handle connection info from host
+                    connectionTypes.set(data.requesterId, 'forwarded');
+                    break;
+                default:
+                    console.error('Unknown data type:', data.type);
             }
         } catch (error) {
             console.error('Data handling error:', error);
@@ -1529,6 +1571,138 @@ function downloadBlob(blob, fileName) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+// Update connect function to track connection types
+async function connect(peerId) {
+    try {
+        if (connections.has(peerId)) {
+            console.log('Already connected to peer:', peerId);
+            return connections.get(peerId);
+        }
+
+        console.log('Connecting to peer:', peerId);
+        const conn = peer.connect(peerId, {
+            reliable: true,
+            serialization: 'binary'
+        });
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+            }, CONNECTION_TIMEOUT);
+
+            conn.on('open', () => {
+                clearTimeout(timeout);
+                connections.set(peerId, conn);
+                connectionTypes.set(peerId, 'direct'); // Mark as direct connection
+                setupConnectionHandlers(conn);
+                resolve(conn);
+            });
+
+            conn.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+
+        return conn;
+    } catch (error) {
+        console.error('Failed to connect:', error);
+        // If direct connection fails and we're not already trying through host
+        if (hostId && peerId !== hostId && !connectionTypes.get(peerId)) {
+            console.log('Attempting connection through host');
+            try {
+                const hostConn = await connect(hostId);
+                connectionTypes.set(peerId, 'forwarded'); // Mark as forwarded connection
+                hostConn.send({
+                    type: 'connection-request',
+                    targetPeerId: peerId
+                });
+                return hostConn; // Return host connection for forwarded communication
+            } catch (hostError) {
+                console.error('Failed to connect through host:', hostError);
+                throw hostError;
+            }
+        }
+        throw error;
+    }
+}
+
+// Update requestBlob function
+async function requestBlob(fileId, fileName, senderId) {
+    try {
+        console.log('Requesting blob:', fileId, 'from sender:', senderId);
+        
+        let senderConn;
+        const connectionType = connectionTypes.get(senderId);
+        
+        if (!connectionType) {
+            // Try direct connection first
+            try {
+                senderConn = await connect(senderId);
+                connectionTypes.set(senderId, 'direct');
+            } catch (directError) {
+                console.log('Direct connection failed, trying through host');
+                if (hostId && senderId !== hostId) {
+                    senderConn = await connect(hostId);
+                    connectionTypes.set(senderId, 'forwarded');
+                } else {
+                    throw directError;
+                }
+            }
+        } else {
+            // Use existing connection type
+            senderConn = connectionType === 'direct' ? 
+                await connect(senderId) : 
+                await connect(hostId);
+        }
+
+        if (!senderConn.open) {
+            throw new Error('Connection not open');
+        }
+
+        // Send appropriate request based on connection type
+        if (connectionTypes.get(senderId) === 'direct') {
+            senderConn.send({
+                type: 'blob-request',
+                fileId: fileId,
+                fileName: fileName
+            });
+        } else {
+            senderConn.send({
+                type: 'blob-request-forward',
+                fileId: fileId,
+                fileName: fileName,
+                originalSender: senderId,
+                requesterId: peer.id
+            });
+        }
+
+        // Update transfer state
+        transferState.pendingTransfers.set(fileId, {
+            senderId: senderId,
+            fileName: fileName,
+            startTime: Date.now(),
+            isDirectTransfer: connectionTypes.get(senderId) === 'direct'
+        });
+
+        // Set up transfer timeout
+        setTimeout(() => {
+            const transfer = transferState.pendingTransfers.get(fileId);
+            if (transfer && !transfer.completed) {
+                console.error('Transfer request timed out');
+                transferState.pendingTransfers.delete(fileId);
+                throw new Error('Transfer request timed out');
+            }
+        }, 30000);
+
+    } catch (error) {
+        console.error('Error requesting blob:', error);
+        updateStatus(`Failed to request file: ${error.message}`);
+        showError(`Failed to request file: ${error.message}`);
+        throw error;
+    }
 }
 
 init();

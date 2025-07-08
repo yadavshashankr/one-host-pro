@@ -252,10 +252,7 @@ function initPeerJS() {
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' }
                 ]
-            },
-            reliable: true,
-            retries: 3,
-            reconnectTimer: 1000
+            }
         });
 
         peer.on('open', (id) => {
@@ -270,7 +267,6 @@ function initPeerJS() {
             connections.set(conn.peer, conn);
             updateConnectionStatus('connecting', 'Incoming connection...');
             setupConnectionHandlers(conn);
-            monitorConnectionQuality(conn);
         });
 
         peer.on('error', (error) => {
@@ -313,36 +309,6 @@ function initPeerJS() {
     }
 }
 
-// Monitor connection quality
-function monitorConnectionQuality(conn) {
-    const pingInterval = setInterval(() => {
-        if (conn && conn.open) {
-            const start = Date.now();
-            conn.send({
-                type: 'ping',
-                timestamp: start
-            });
-        } else {
-            clearInterval(pingInterval);
-        }
-    }, 5000);
-
-    conn.on('data', (data) => {
-        if (data.type === 'ping') {
-            conn.send({
-                type: 'pong',
-                originalTimestamp: data.timestamp
-            });
-        } else if (data.type === 'pong') {
-            const latency = Date.now() - data.originalTimestamp;
-            if (latency > 1000) { // High latency
-                console.warn(`High latency (${latency}ms) detected with peer ${conn.peer}`);
-                showNotification(`High latency detected with peer ${conn.peer}`, 'warning');
-            }
-        }
-    });
-}
-
 // Setup connection event handlers
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
@@ -368,16 +334,6 @@ function setupConnectionHandlers(conn) {
     conn.on('data', async (data) => {
         try {
             switch (data.type) {
-                case 'ping':
-                    // Handle ping message
-                    conn.send({
-                        type: 'pong',
-                        originalTimestamp: data.timestamp
-                    });
-                    break;
-                case 'pong':
-                    // Handled by monitorConnectionQuality
-                    break;
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
                     await handleSimultaneousDownloadRequest(data, conn);
                     break;
@@ -418,12 +374,6 @@ function setupConnectionHandlers(conn) {
                         id: data.fileId,
                         sharedBy: data.originalSender
                     };
-                    // Send acknowledgment
-                    conn.send({
-                        type: 'file-info-ack',
-                        fileId: data.fileId,
-                        receiverId: peer.id
-                    });
                     // Add to history if not already present
                     if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
                         addFileToHistory(fileInfo, 'received');
@@ -433,9 +383,6 @@ function setupConnectionHandlers(conn) {
                             await forwardFileInfoToPeers(fileInfo, data.fileId);
                         }
                     }
-                    break;
-                case 'file-info-ack':
-                    // Handled by forwardFileInfoToPeers
                     break;
                 case 'file-header':
                     await handleFileHeader(data);
@@ -593,12 +540,9 @@ async function handleFileComplete(data) {
     }
 }
 
-// Forward file info to peers with retry mechanism
+// Forward file info to other connected peers
 async function forwardFileInfoToPeers(fileInfo, fileId) {
-    const maxRetries = 3;
-    const retryDelay = 1000; // 1 second
-
-    // Create a standardized file info object
+    // Create a standardized file info object that includes direct download info
     const fileInfoToSend = {
         type: 'file-info',
         fileId: fileId,
@@ -607,41 +551,18 @@ async function forwardFileInfoToPeers(fileInfo, fileId) {
         fileSize: fileInfo.size,
         originalSender: fileInfo.sharedBy || peer.id,
         timestamp: Date.now(),
-        directDownload: true,
-        retryCount: 0
+        directDownload: true // Indicate this file supports direct download
     };
 
     // Send to all connected peers except the original sender
     for (const [peerId, conn] of connections) {
         if (peerId !== fileInfo.sharedBy && conn && conn.open) {
-            let retries = 0;
-            const sendWithRetry = async () => {
-                try {
-                    console.log(`Forwarding file info to peer: ${peerId} (attempt ${retries + 1})`);
-                    await new Promise((resolve, reject) => {
-                        conn.send(fileInfoToSend);
-                        // Wait for acknowledgment
-                        const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
-                        const handler = (data) => {
-                            if (data.type === 'file-info-ack' && data.fileId === fileId) {
-                                clearTimeout(timeout);
-                                conn.off('data', handler);
-                                resolve();
-                            }
-                        };
-                        conn.on('data', handler);
-                    });
-                } catch (error) {
-                    console.error(`Error forwarding file info to peer ${peerId}:`, error);
-                    if (retries < maxRetries) {
-                        retries++;
-                        await new Promise(resolve => setTimeout(resolve, retryDelay));
-                        return sendWithRetry();
-                    }
-                    throw error;
-                }
-            };
-            await sendWithRetry();
+            try {
+                console.log(`Forwarding file info to peer: ${peerId}`);
+                conn.send(fileInfoToSend);
+            } catch (error) {
+                console.error(`Error forwarding file info to peer ${peerId}:`, error);
+            }
         }
     }
 }
@@ -1310,8 +1231,6 @@ function createCircularProgress() {
     progressCircle.setAttribute("cy", "12");
     progressCircle.setAttribute("r", radius.toString());
     progressCircle.classList.add("progress-bar");
-    
-    // Initialize progress circle with full circumference
     progressCircle.style.strokeDasharray = `${circumference}`;
     progressCircle.style.strokeDashoffset = `${circumference}`;
     
@@ -1322,29 +1241,16 @@ function createCircularProgress() {
     container.classList.add("circular-progress");
     container.appendChild(svg);
     
-    console.log('Created progress circle with circumference:', circumference);
     return { container, progressCircle, circumference };
 }
 
 // Update circular progress
 function updateCircularProgress(progressCircle, circumference, progress) {
-    // Ensure progress is between 0 and 100
-    const normalizedProgress = Math.min(Math.max(progress, 0), 100);
-    
-    // Calculate the offset (reverse the direction for proper fill)
-    const offset = circumference - ((normalizedProgress / 100) * circumference);
-    
-    console.log('Updating progress:', {
-        progress: normalizedProgress,
-        circumference,
-        offset,
-        currentDashArray: progressCircle.style.strokeDasharray,
-        currentOffset: progressCircle.style.strokeDashoffset
+    const percent = Math.min(Math.max(progress, 0), 100);
+    const offset = circumference - (percent / 100 * circumference);
+    requestAnimationFrame(() => {
+        progressCircle.style.strokeDashoffset = `${offset}`;
     });
-    
-    // Update the progress circle
-    progressCircle.style.strokeDasharray = `${circumference}`;
-    progressCircle.style.strokeDashoffset = `${offset}`;
 }
 
 // Create action button
@@ -1353,9 +1259,7 @@ function createActionButton(icon, action, title = "") {
     button.classList.add("file-action");
     button.title = title;
     button.innerHTML = `<span class="material-icons">${icon}</span>`;
-    if (action) {
-        button.onclick = action;
-    }
+    button.onclick = action;
     return button;
 }
 
@@ -1374,12 +1278,8 @@ function createDownloadButton(fileInfo) {
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                console.log('Download progress:', progress);
                 updateCircularProgress(progressCircle, circumference, progress);
             });
-            
-            // Ensure final progress is shown
-            updateCircularProgress(progressCircle, circumference, 100);
             
             // Store the downloaded file
             const fileUrl = URL.createObjectURL(blob);

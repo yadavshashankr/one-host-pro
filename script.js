@@ -252,7 +252,10 @@ function initPeerJS() {
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' }
                 ]
-            }
+            },
+            reliable: true,
+            retries: 3,
+            reconnectTimer: 1000
         });
 
         peer.on('open', (id) => {
@@ -267,6 +270,7 @@ function initPeerJS() {
             connections.set(conn.peer, conn);
             updateConnectionStatus('connecting', 'Incoming connection...');
             setupConnectionHandlers(conn);
+            monitorConnectionQuality(conn);
         });
 
         peer.on('error', (error) => {
@@ -309,6 +313,36 @@ function initPeerJS() {
     }
 }
 
+// Monitor connection quality
+function monitorConnectionQuality(conn) {
+    const pingInterval = setInterval(() => {
+        if (conn && conn.open) {
+            const start = Date.now();
+            conn.send({
+                type: 'ping',
+                timestamp: start
+            });
+        } else {
+            clearInterval(pingInterval);
+        }
+    }, 5000);
+
+    conn.on('data', (data) => {
+        if (data.type === 'ping') {
+            conn.send({
+                type: 'pong',
+                originalTimestamp: data.timestamp
+            });
+        } else if (data.type === 'pong') {
+            const latency = Date.now() - data.originalTimestamp;
+            if (latency > 1000) { // High latency
+                console.warn(`High latency (${latency}ms) detected with peer ${conn.peer}`);
+                showNotification(`High latency detected with peer ${conn.peer}`, 'warning');
+            }
+        }
+    });
+}
+
 // Setup connection event handlers
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
@@ -334,6 +368,16 @@ function setupConnectionHandlers(conn) {
     conn.on('data', async (data) => {
         try {
             switch (data.type) {
+                case 'ping':
+                    // Handle ping message
+                    conn.send({
+                        type: 'pong',
+                        originalTimestamp: data.timestamp
+                    });
+                    break;
+                case 'pong':
+                    // Handled by monitorConnectionQuality
+                    break;
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
                     await handleSimultaneousDownloadRequest(data, conn);
                     break;
@@ -374,6 +418,12 @@ function setupConnectionHandlers(conn) {
                         id: data.fileId,
                         sharedBy: data.originalSender
                     };
+                    // Send acknowledgment
+                    conn.send({
+                        type: 'file-info-ack',
+                        fileId: data.fileId,
+                        receiverId: peer.id
+                    });
                     // Add to history if not already present
                     if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
                         addFileToHistory(fileInfo, 'received');
@@ -383,6 +433,9 @@ function setupConnectionHandlers(conn) {
                             await forwardFileInfoToPeers(fileInfo, data.fileId);
                         }
                     }
+                    break;
+                case 'file-info-ack':
+                    // Handled by forwardFileInfoToPeers
                     break;
                 case 'file-header':
                     await handleFileHeader(data);
@@ -540,9 +593,12 @@ async function handleFileComplete(data) {
     }
 }
 
-// Forward file info to other connected peers
+// Forward file info to peers with retry mechanism
 async function forwardFileInfoToPeers(fileInfo, fileId) {
-    // Create a standardized file info object that includes direct download info
+    const maxRetries = 3;
+    const retryDelay = 1000; // 1 second
+
+    // Create a standardized file info object
     const fileInfoToSend = {
         type: 'file-info',
         fileId: fileId,
@@ -551,18 +607,41 @@ async function forwardFileInfoToPeers(fileInfo, fileId) {
         fileSize: fileInfo.size,
         originalSender: fileInfo.sharedBy || peer.id,
         timestamp: Date.now(),
-        directDownload: true // Indicate this file supports direct download
+        directDownload: true,
+        retryCount: 0
     };
 
     // Send to all connected peers except the original sender
     for (const [peerId, conn] of connections) {
         if (peerId !== fileInfo.sharedBy && conn && conn.open) {
-            try {
-                console.log(`Forwarding file info to peer: ${peerId}`);
-                conn.send(fileInfoToSend);
-            } catch (error) {
-                console.error(`Error forwarding file info to peer ${peerId}:`, error);
-            }
+            let retries = 0;
+            const sendWithRetry = async () => {
+                try {
+                    console.log(`Forwarding file info to peer: ${peerId} (attempt ${retries + 1})`);
+                    await new Promise((resolve, reject) => {
+                        conn.send(fileInfoToSend);
+                        // Wait for acknowledgment
+                        const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+                        const handler = (data) => {
+                            if (data.type === 'file-info-ack' && data.fileId === fileId) {
+                                clearTimeout(timeout);
+                                conn.off('data', handler);
+                                resolve();
+                            }
+                        };
+                        conn.on('data', handler);
+                    });
+                } catch (error) {
+                    console.error(`Error forwarding file info to peer ${peerId}:`, error);
+                    if (retries < maxRetries) {
+                        retries++;
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        return sendWithRetry();
+                    }
+                    throw error;
+                }
+            };
+            await sendWithRetry();
         }
     }
 }

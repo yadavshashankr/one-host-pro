@@ -554,6 +554,9 @@ input[type="file"] {
     fill: none;
     stroke-width: 2.5;
     stroke-linecap: round;
+    transform-origin: center;
+    transform: rotate(-90deg);
+    transition: stroke-dashoffset 0.1s linear;
 }
 
 .circular-progress .progress-bg {
@@ -562,9 +565,7 @@ input[type="file"] {
 
 .circular-progress .progress-bar {
     stroke: #2196F3;
-    stroke-dasharray: 50.26548245743669;
-    stroke-dashoffset: 50.26548245743669;
-    transition: stroke-dashoffset 0.3s ease;
+    transition: stroke-dashoffset 0.1s linear;
 }
 
 /* Success animation */
@@ -575,13 +576,13 @@ input[type="file"] {
 }
 
 .success-check {
-    color: var(--success-color);
+    color: #4CAF50;
     animation: checkmark 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 /* Open file button */
 .file-action.open-file {
-    color: var(--primary-color);
+    color: #2196F3;
     opacity: 0;
     animation: fadeIn 0.3s ease forwards;
 }

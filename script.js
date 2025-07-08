@@ -1261,6 +1261,18 @@ function updateCircularProgress(progressCircle, circumference, progress) {
     });
 }
 
+// Create action button
+function createActionButton(icon, action, title = "") {
+    const button = document.createElement("button");
+    button.classList.add("file-action");
+    button.title = title;
+    button.innerHTML = `<span class="material-icons">${icon}</span>`;
+    if (action) {
+        button.onclick = action;
+    }
+    return button;
+}
+
 // Create download button with progress
 function createDownloadButton(fileInfo) {
     const container = document.createElement("div");

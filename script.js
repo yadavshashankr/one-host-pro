@@ -5,6 +5,10 @@ const DB_VERSION = 1;
 const STORE_NAME = 'files';
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 60000; // 60 seconds
+const MAX_CHUNK_SIZE = 262144; // 256KB chunks for faster transfer
+const MIN_CHUNK_SIZE = 16384; // 16KB minimum chunk size
+const DYNAMIC_CHUNK_THRESHOLD = 104857600; // 100MB threshold for dynamic chunking
+const MAX_BUFFER_SIZE = 524288000; // 500MB maximum buffer size
 
 // Add simultaneous download message types
 const MESSAGE_TYPES = {
@@ -443,36 +447,177 @@ function generateFileId(file) {
     return `${file.name}-${file.size}`;
 }
 
-// Handle file header
-async function handleFileHeader(data) {
-    console.log('Received file header:', data);
-    fileChunks[data.fileId] = {
-        chunks: [],
-        fileName: data.fileName,
-        fileType: data.fileType,
-        fileSize: data.fileSize,
-        receivedSize: 0,
-        originalSender: data.originalSender
-    };
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
+// Function to calculate optimal chunk size based on file size
+function calculateChunkSize(fileSize) {
+    if (fileSize <= DYNAMIC_CHUNK_THRESHOLD) {
+        return MIN_CHUNK_SIZE;
+    }
+    // For larger files, use larger chunks, but don't exceed MAX_CHUNK_SIZE
+    return Math.min(MAX_CHUNK_SIZE, Math.max(MIN_CHUNK_SIZE, Math.floor(fileSize / 10000)));
 }
 
-// Handle file chunk
-async function handleFileChunk(data) {
-    const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
-
-    fileData.chunks.push(data.data);
-    fileData.receivedSize += data.data.byteLength;
+// Function to handle large file transfer
+async function handleLargeFileTransfer(buffer, fileInfo, conn) {
+    const chunkSize = calculateChunkSize(buffer.byteLength);
+    let offset = 0;
+    let lastProgressUpdate = Date.now();
+    const startTime = Date.now();
+    let bytesTransferred = 0;
     
-    // Update progress more smoothly (update every 1% change)
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress);
-        fileData.lastProgressUpdate = currentProgress;
+    try {
+        // Send file header with chunk size info
+        conn.send({
+            type: 'file-header',
+            fileId: fileInfo.fileId,
+            fileName: fileInfo.fileName,
+            fileType: fileInfo.type,
+            fileSize: buffer.byteLength,
+            chunkSize: chunkSize,
+            timestamp: startTime
+        });
+
+        while (offset < buffer.byteLength) {
+            // Check if connection is still open
+            if (!conn.open) {
+                throw new Error('Connection closed during transfer');
+            }
+
+            const chunk = buffer.slice(offset, offset + chunkSize);
+            
+            // Send chunk with progress information
+            await new Promise((resolve, reject) => {
+                conn.send({
+                    type: 'file-chunk',
+                    fileId: fileInfo.fileId,
+                    chunk: chunk,
+                    offset: offset,
+                    progress: (offset / buffer.byteLength) * 100
+                });
+
+                // Wait for a short time to prevent overwhelming the connection
+                setTimeout(resolve, 1);
+            });
+
+            offset += chunk.byteLength;
+            bytesTransferred += chunk.byteLength;
+
+            // Update progress every second
+            const now = Date.now();
+            if (now - lastProgressUpdate > 1000) {
+                const progress = (offset / buffer.byteLength) * 100;
+                const speed = bytesTransferred / ((now - startTime) / 1000); // bytes per second
+                updateTransferInfo(`Sending: ${Math.round(progress)}% (${formatBytes(speed)}/s)`);
+                lastProgressUpdate = now;
+            }
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileInfo.fileId,
+            fileName: fileInfo.fileName,
+            timestamp: Date.now()
+        });
+
+        updateTransferInfo('');
+        showNotification(`${fileInfo.fileName} sent successfully!`);
+    } catch (error) {
+        console.error('Error during file transfer:', error);
+        conn.send({
+            type: 'transfer-error',
+            fileId: fileInfo.fileId,
+            error: error.message
+        });
+        throw error;
     }
+}
+
+// Update the file receiving logic
+let fileBuffers = new Map(); // Store file buffers
+
+// Function to handle incoming file chunks
+async function handleFileChunk(data) {
+    try {
+        const { fileId, chunk, offset } = data;
+        let fileData = fileBuffers.get(fileId);
+
+        if (!fileData) {
+            console.error('No file data found for chunk:', fileId);
+            return;
+        }
+
+        // Store chunk in the file buffer
+        const view = new Uint8Array(fileData.buffer);
+        view.set(new Uint8Array(chunk), offset);
+        fileData.receivedBytes += chunk.byteLength;
+
+        // Update progress
+        const currentProgress = (fileData.receivedBytes / fileData.fileSize) * 100;
+        const now = Date.now();
+        const speed = fileData.receivedBytes / ((now - fileData.startTime) / 1000);
+        
+        updateTransferInfo(`Receiving: ${Math.round(currentProgress)}% (${formatBytes(speed)}/s)`);
+        elements.transferProgress.value = currentProgress;
+
+        // Clean up if file is complete
+        if (fileData.receivedBytes >= fileData.fileSize) {
+            const blob = new Blob([fileData.buffer], { type: fileData.fileType });
+            await handleFileComplete({
+                fileId: fileId,
+                fileName: fileData.fileName,
+                type: fileData.fileType
+            }, blob);
+            
+            // Clean up
+            fileData.buffer = null;
+            fileBuffers.delete(fileId);
+        }
+    } catch (error) {
+        console.error('Error handling file chunk:', error);
+        showNotification('Error receiving file chunk', 'error');
+    }
+}
+
+// Update file header handler for large files
+async function handleFileHeader(data) {
+    const { fileId, fileName, fileType, fileSize, chunkSize } = data;
+    
+    try {
+        // Check if file size is too large for available memory
+        if (fileSize > MAX_BUFFER_SIZE) {
+            throw new Error(`File too large: ${formatBytes(fileSize)} exceeds maximum of ${formatBytes(MAX_BUFFER_SIZE)}`);
+        }
+
+        // Initialize file buffer
+        const buffer = new ArrayBuffer(fileSize);
+        fileBuffers.set(fileId, {
+            buffer: buffer,
+            fileName: fileName,
+            fileType: fileType,
+            fileSize: fileSize,
+            receivedBytes: 0,
+            startTime: Date.now()
+        });
+
+        // Show progress bar
+        elements.transferProgress.classList.remove('hidden');
+        elements.transferProgress.value = 0;
+        elements.transferProgress.max = 100;
+        
+        updateTransferInfo(`Receiving: ${fileName}`);
+    } catch (error) {
+        console.error('Error handling file header:', error);
+        showNotification(`Failed to initialize file transfer: ${error.message}`, 'error');
+    }
+}
+
+// Helper function to format bytes
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
 
 // Handle file completion

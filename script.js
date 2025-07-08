@@ -674,26 +674,47 @@ async function handleBlobRequest(data, conn) {
     }
 }
 
-// Update requestAndDownloadBlob function to handle progress tracking
+// Update requestAndDownloadBlob function to handle connections and progress tracking
 async function requestAndDownloadBlob(fileInfo, onProgress) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         try {
             let receivedSize = 0;
             const chunks = [];
             
-            // Find the connection to the original sender
-            const conn = Array.from(connections.values()).find(c => 
-                c && c.open && c.peer === fileInfo.originalSender
-            );
+            // Try to find existing connection or establish new one
+            let conn = connections.get(fileInfo.sharedBy);
             
-            if (!conn) {
-                throw new Error('Sender not connected');
+            if (!conn || !conn.open) {
+                // If no direct connection exists, establish one
+                console.log('No direct connection to sender, establishing connection...');
+                conn = peer.connect(fileInfo.sharedBy, {
+                    reliable: true
+                });
+                
+                // Wait for connection to open
+                await new Promise((resolveConn, rejectConn) => {
+                    const timeout = setTimeout(() => {
+                        rejectConn(new Error('Connection timeout'));
+                    }, 10000); // 10 second timeout
+                    
+                    conn.on('open', () => {
+                        clearTimeout(timeout);
+                        connections.set(fileInfo.sharedBy, conn);
+                        setupConnectionHandlers(conn);
+                        resolveConn();
+                    });
+                    
+                    conn.on('error', (err) => {
+                        clearTimeout(timeout);
+                        rejectConn(err);
+                    });
+                });
             }
 
             // Set up data handler for receiving chunks
             const originalDataHandler = conn.dataHandler;
-            conn.on('data', function handleData(data) {
-                if (data.type === 'blob-chunk' && data.fileId === fileInfo.fileId) {
+            const handleData = function(data) {
+                if (data.type === 'blob-chunk' && data.fileId === fileInfo.id) {
                     chunks.push(data.chunk);
                     receivedSize += data.chunk.byteLength;
                     
@@ -714,20 +735,26 @@ async function requestAndDownloadBlob(fileInfo, onProgress) {
                         resolve(blob);
                     }
                 } else if (data.type === 'blob-error') {
+                    conn.off('data', handleData);
+                    conn.dataHandler = originalDataHandler;
                     reject(new Error(data.error));
                 } else {
                     // Handle other messages with original handler
                     originalDataHandler(data);
                 }
-            });
+            };
+
+            conn.on('data', handleData);
 
             // Request the blob
             conn.send({
                 type: 'blob-request',
-                fileId: fileInfo.fileId
+                fileId: fileInfo.id,
+                fileName: fileInfo.name
             });
             
         } catch (error) {
+            console.error('Download error:', error);
             reject(error);
         }
     });

@@ -1,7 +1,7 @@
 # WebRTC File Sharing
 
 <p align="center">
-  <img src="assets/logo.svg" alt="WebRTC File Sharing Logo" width="200">
+  <img src="assets/logo.svg" alt="WebRTC File Sharing Logo" width="400">
 </p>
 
 A browser-based peer-to-peer file sharing application using WebRTC. Share files directly between browsers with no server storage.

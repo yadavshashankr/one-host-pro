@@ -674,64 +674,63 @@ async function handleBlobRequest(data, conn) {
     }
 }
 
-// Function to request and download a blob
+// Update requestAndDownloadBlob function to handle progress tracking
 async function requestAndDownloadBlob(fileInfo, onProgress) {
-    try {
-        // Always try to connect to original sender directly
-        let conn = connections.get(fileInfo.sharedBy);
-        
-        if (!conn || !conn.open) {
-            // If no direct connection exists, establish one
-            console.log('No direct connection to sender, establishing connection...');
-            conn = peer.connect(fileInfo.sharedBy, {
-                reliable: true
+    return new Promise((resolve, reject) => {
+        try {
+            let receivedSize = 0;
+            const chunks = [];
+            
+            // Find the connection to the original sender
+            const conn = Array.from(connections.values()).find(c => 
+                c && c.open && c.peer === fileInfo.originalSender
+            );
+            
+            if (!conn) {
+                throw new Error('Sender not connected');
+            }
+
+            // Set up data handler for receiving chunks
+            const originalDataHandler = conn.dataHandler;
+            conn.on('data', function handleData(data) {
+                if (data.type === 'blob-chunk' && data.fileId === fileInfo.fileId) {
+                    chunks.push(data.chunk);
+                    receivedSize += data.chunk.byteLength;
+                    
+                    // Update progress
+                    if (onProgress) {
+                        const progress = (receivedSize / fileInfo.size) * 100;
+                        onProgress(Math.min(progress, 100));
+                    }
+                    
+                    // Check if download is complete
+                    if (receivedSize >= fileInfo.size) {
+                        // Restore original data handler
+                        conn.off('data', handleData);
+                        conn.dataHandler = originalDataHandler;
+                        
+                        // Combine chunks into final blob
+                        const blob = new Blob(chunks, { type: fileInfo.type });
+                        resolve(blob);
+                    }
+                } else if (data.type === 'blob-error') {
+                    reject(new Error(data.error));
+                } else {
+                    // Handle other messages with original handler
+                    originalDataHandler(data);
+                }
+            });
+
+            // Request the blob
+            conn.send({
+                type: 'blob-request',
+                fileId: fileInfo.fileId
             });
             
-            // Wait for connection to open
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error('Connection timeout'));
-                }, 10000); // 10 second timeout
-
-                conn.on('open', () => {
-                    clearTimeout(timeout);
-                    connections.set(fileInfo.sharedBy, conn);
-                    setupConnectionHandlers(conn);
-                    resolve();
-                });
-
-                conn.on('error', (err) => {
-                    clearTimeout(timeout);
-                    reject(err);
-                });
-            });
+        } catch (error) {
+            reject(error);
         }
-
-        // Now we should have a direct connection to the sender
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
-        updateTransferInfo(`Requesting ${fileInfo.name} directly from sender...`);
-
-        // Request the file directly
-        conn.send({
-            type: 'blob-request',
-            fileId: fileInfo.id,
-            fileName: fileInfo.name,
-            directRequest: true
-        });
-
-        // Add progress updates:
-        if (onProgress) {
-            const progress = (fileInfo.receivedSize / fileInfo.size) * 100;
-            onProgress(progress);
-        }
-
-    } catch (error) {
-        console.error('Error requesting file:', error);
-        showNotification(`Failed to download file: ${error.message}`, 'error');
-        elements.transferProgress.classList.add('hidden');
-        updateTransferInfo('');
-    }
+    });
 }
 
 // Handle forwarded blob request (host only)
@@ -1592,7 +1591,7 @@ function createDownloadButton(fileInfo) {
 }
 
 // Update addFileToHistory function
-function addFileToHistory(fileInfo, type = 'received') {
+function addFileToHistory(fileInfo, type) {
     const list = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     const listItem = document.createElement('li');
     
@@ -1632,17 +1631,6 @@ function addFileToHistory(fileInfo, type = 'received') {
     
     // Add to list
     list.appendChild(listItem);
-}
-
-// Update requestAndDownloadBlob function to accept progress callback
-async function requestAndDownloadBlob(fileInfo, onProgress) {
-    // ... existing requestAndDownloadBlob code ...
-    // Add progress updates:
-    if (onProgress) {
-        const progress = (receivedSize / fileInfo.size) * 100;
-        onProgress(progress);
-    }
-    // ... rest of the existing code ...
 }
 
 init();

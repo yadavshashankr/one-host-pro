@@ -14,20 +14,6 @@ const MESSAGE_TYPES = {
     SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
 };
 
-// Utility Functions
-// Format bytes to human readable size
-function formatBytes(bytes, decimals = 2) {
-    if (bytes === 0) return '0 Bytes';
-
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
 // DOM Elements
 const elements = {
     peerId: document.getElementById('peer-id'),
@@ -674,90 +660,58 @@ async function handleBlobRequest(data, conn) {
     }
 }
 
-// Update requestAndDownloadBlob function to handle connections and progress tracking
-async function requestAndDownloadBlob(fileInfo, onProgress) {
-    return new Promise(async (resolve, reject) => {
-        try {
-            let receivedSize = 0;
-            const chunks = [];
-            
-            // Try to find existing connection or establish new one
-            let conn = connections.get(fileInfo.sharedBy);
-            
-            if (!conn || !conn.open) {
-                // If no direct connection exists, establish one
-                console.log('No direct connection to sender, establishing connection...');
-                conn = peer.connect(fileInfo.sharedBy, {
-                    reliable: true
-                });
-                
-                // Wait for connection to open
-                await new Promise((resolveConn, rejectConn) => {
-                    const timeout = setTimeout(() => {
-                        rejectConn(new Error('Connection timeout'));
-                    }, 10000); // 10 second timeout
-                    
-                    conn.on('open', () => {
-                        clearTimeout(timeout);
-                        connections.set(fileInfo.sharedBy, conn);
-                        setupConnectionHandlers(conn);
-                        resolveConn();
-                    });
-                    
-                    conn.on('error', (err) => {
-                        clearTimeout(timeout);
-                        rejectConn(err);
-                    });
-                });
-            }
-
-            // Set up data handler for receiving chunks
-            const originalDataHandler = conn.dataHandler;
-            const handleData = function(data) {
-                if (data.type === 'blob-chunk' && data.fileId === fileInfo.id) {
-                    chunks.push(data.chunk);
-                    receivedSize += data.chunk.byteLength;
-                    
-                    // Update progress
-                    if (onProgress) {
-                        const progress = (receivedSize / fileInfo.size) * 100;
-                        onProgress(Math.min(progress, 100));
-                    }
-                    
-                    // Check if download is complete
-                    if (receivedSize >= fileInfo.size) {
-                        // Restore original data handler
-                        conn.off('data', handleData);
-                        conn.dataHandler = originalDataHandler;
-                        
-                        // Combine chunks into final blob
-                        const blob = new Blob(chunks, { type: fileInfo.type });
-                        resolve(blob);
-                    }
-                } else if (data.type === 'blob-error') {
-                    conn.off('data', handleData);
-                    conn.dataHandler = originalDataHandler;
-                    reject(new Error(data.error));
-                } else {
-                    // Handle other messages with original handler
-                    originalDataHandler(data);
-                }
-            };
-
-            conn.on('data', handleData);
-
-            // Request the blob
-            conn.send({
-                type: 'blob-request',
-                fileId: fileInfo.id,
-                fileName: fileInfo.name
+// Function to request and download a blob
+async function requestAndDownloadBlob(fileInfo) {
+    try {
+        // Always try to connect to original sender directly
+        let conn = connections.get(fileInfo.sharedBy);
+        
+        if (!conn || !conn.open) {
+            // If no direct connection exists, establish one
+            console.log('No direct connection to sender, establishing connection...');
+            conn = peer.connect(fileInfo.sharedBy, {
+                reliable: true
             });
             
-        } catch (error) {
-            console.error('Download error:', error);
-            reject(error);
+            // Wait for connection to open
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Connection timeout'));
+                }, 10000); // 10 second timeout
+
+                conn.on('open', () => {
+                    clearTimeout(timeout);
+                    connections.set(fileInfo.sharedBy, conn);
+                    setupConnectionHandlers(conn);
+                    resolve();
+                });
+
+                conn.on('error', (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                });
+            });
         }
-    });
+
+        // Now we should have a direct connection to the sender
+        elements.transferProgress.classList.remove('hidden');
+        updateProgress(0);
+        updateTransferInfo(`Requesting ${fileInfo.name} directly from sender...`);
+
+        // Request the file directly
+        conn.send({
+            type: 'blob-request',
+            fileId: fileInfo.id,
+            fileName: fileInfo.name,
+            directRequest: true
+        });
+
+    } catch (error) {
+        console.error('Error requesting file:', error);
+        showNotification(`Failed to download file: ${error.message}`, 'error');
+        elements.transferProgress.classList.add('hidden');
+        updateTransferInfo('');
+    }
 }
 
 // Handle forwarded blob request (host only)
@@ -793,60 +747,42 @@ function updateTransferInfo(message) {
 
 // Add file to history
 function addFileToHistory(fileInfo, type) {
-    const list = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+    const fileId = fileInfo.id || generateFileId(fileInfo);
     
-    // Check if file already exists in the list
-    const existingItem = Array.from(list.children).find(item => {
-        const fileName = item.querySelector('.file-name').textContent;
-        const fileSize = item.querySelector('.file-size').textContent;
-        return fileName === fileInfo.name && fileSize === formatBytes(fileInfo.size);
-    });
+    // Determine the correct type based on who shared the file
+    const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
     
-    if (existingItem) {
-        // If file exists and is not downloaded, don't create a new item
-        if (!existingItem.classList.contains('downloaded')) {
-            return;
-        }
+    // Remove from both history sets to prevent duplicates
+    fileHistory.sent.delete(fileId);
+    fileHistory.received.delete(fileId);
+    
+    // Add to the correct history set
+    fileHistory[actualType].add(fileId);
+    
+    // Remove existing entries from UI if any
+    const sentList = elements.sentFilesList;
+    const receivedList = elements.receivedFilesList;
+    
+    // Remove from sent list if exists
+    const existingInSent = sentList.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingInSent) {
+        existingInSent.remove();
     }
     
-    const listItem = document.createElement('li');
-    
-    // File icon
-    const fileIcon = document.createElement('span');
-    fileIcon.classList.add('material-icons');
-    fileIcon.textContent = 'description';
-    
-    // File info
-    const fileInfoDiv = document.createElement('div');
-    fileInfoDiv.classList.add('file-info');
-    
-    const fileName = document.createElement('span');
-    fileName.classList.add('file-name');
-    fileName.textContent = fileInfo.name;
-    
-    const fileSize = document.createElement('span');
-    fileSize.classList.add('file-size');
-    fileSize.textContent = formatBytes(fileInfo.size);
-    
-    const sharedBy = document.createElement('span');
-    sharedBy.classList.add('shared-by');
-    sharedBy.textContent = `${type === 'sent' ? 'Shared with' : 'Shared by'}: ${fileInfo.sharedBy || 'Unknown'}`;
-    
-    fileInfoDiv.appendChild(fileName);
-    fileInfoDiv.appendChild(fileSize);
-    fileInfoDiv.appendChild(sharedBy);
-    
-    // Add elements to list item
-    listItem.appendChild(fileIcon);
-    listItem.appendChild(fileInfoDiv);
-    
-    // Add download/action button for received files
-    if (type === 'received') {
-        listItem.appendChild(createDownloadButton(fileInfo));
+    // Remove from received list if exists
+    const existingInReceived = receivedList.querySelector(`[data-file-id="${fileId}"]`);
+    if (existingInReceived) {
+        existingInReceived.remove();
     }
     
-    // Add to list
-    list.appendChild(listItem);
+    // Update UI with the correct list
+    const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
+    updateFilesList(listElement, fileInfo, actualType);
+
+    // Only broadcast updates for files we send originally
+    if (fileInfo.sharedBy === peer.id) {
+        broadcastFileUpdate(fileInfo);
+    }
 }
 
 // Broadcast file update to all peers
@@ -1208,119 +1144,117 @@ function updateConnectionStatus(status, message) {
     }
 }
 
-// Create circular progress indicator
-function createCircularProgress() {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+// Update files list display
+function updateFilesList(listElement, fileInfo, type) {
+    console.log('Updating files list:', { type, fileInfo });
     
-    svg.setAttribute("viewBox", "0 0 24 24");
-    
-    // Set common circle attributes
-    const radius = 8;
-    const circumference = 2 * Math.PI * radius;
-    
-    // Background circle
-    circle.setAttribute("cx", "12");
-    circle.setAttribute("cy", "12");
-    circle.setAttribute("r", radius.toString());
-    circle.classList.add("progress-bg");
-    
-    // Progress circle
-    progressCircle.setAttribute("cx", "12");
-    progressCircle.setAttribute("cy", "12");
-    progressCircle.setAttribute("r", radius.toString());
-    progressCircle.classList.add("progress-bar");
-    progressCircle.style.strokeDasharray = `${circumference}`;
-    progressCircle.style.strokeDashoffset = `${circumference}`;
-    
-    svg.appendChild(circle);
-    svg.appendChild(progressCircle);
-    
-    const container = document.createElement("div");
-    container.classList.add("circular-progress");
-    container.appendChild(svg);
-    
-    return { container, progressCircle, circumference };
-}
+    // Check if file already exists in this list
+    const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
+    if (existingFile) {
+        console.log('File already exists in list, updating...');
+        existingFile.remove();
+    }
 
-// Update circular progress
-function updateCircularProgress(progressCircle, circumference, progress) {
-    const percent = Math.min(Math.max(progress, 0), 100);
-    const offset = circumference - (percent / 100 * circumference);
-    requestAnimationFrame(() => {
-        progressCircle.style.strokeDashoffset = `${offset}`;
-    });
-}
-
-// Create action button
-function createActionButton(icon, action, title = "") {
-    const button = document.createElement("button");
-    button.classList.add("file-action");
-    button.title = title;
-    button.innerHTML = `<span class="material-icons">${icon}</span>`;
-    button.onclick = action;
-    return button;
-}
-
-// Create download button with progress
-function createDownloadButton(fileInfo) {
-    const container = document.createElement("div");
-    container.classList.add("file-actions");
+    const li = document.createElement('li');
+    li.className = 'file-item';
+    li.setAttribute('data-file-id', fileInfo.id);
     
-    // Create initial download button
-    const downloadButton = createActionButton("download", async () => {
+    const icon = document.createElement('span');
+    icon.className = 'material-icons';
+    icon.textContent = getFileIcon(fileInfo.type);
+    
+    const info = document.createElement('div');
+    info.className = 'file-info';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-name';
+    nameSpan.textContent = fileInfo.name;
+    
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'file-size';
+    sizeSpan.textContent = formatFileSize(fileInfo.size);
+
+    const sharedBySpan = document.createElement('span');
+    sharedBySpan.className = 'shared-by';
+    sharedBySpan.textContent = type === 'sent' ? 
+        'Sent to connected peers' : 
+        `Received from peer ${fileInfo.sharedBy || 'Unknown'}`;
+    
+    info.appendChild(nameSpan);
+    info.appendChild(sizeSpan);
+    info.appendChild(sharedBySpan);
+    
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'icon-button';
+    downloadBtn.title = 'Download file';
+    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+    downloadBtn.onclick = async () => {
         try {
-            // Replace download button with progress indicator
-            container.innerHTML = "";
-            const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
-            container.appendChild(progressContainer);
-            
-            // Start download with progress updates
-            const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                updateCircularProgress(progressCircle, circumference, progress);
-            });
-            
-            // Store the downloaded file
-            const fileUrl = URL.createObjectURL(blob);
-            fileInfo.localUrl = fileUrl;
-            
-            // Add downloaded class to list item
-            const listItem = container.closest("li");
-            if (listItem) {
-                listItem.classList.add("downloaded");
+            if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
+                // For sent files, we have the blob locally
+                const blob = sentFileBlobs.get(fileInfo.id);
+                downloadBlob(blob, fileInfo.name);
+            } else {
+                // For received files, request the blob from the original sender
+                await requestAndDownloadBlob(fileInfo);
             }
-            
-            // Show success checkmark
-            container.innerHTML = "";
-            const checkButton = createActionButton("check_circle", null);
-            const checkIcon = checkButton.querySelector(".material-icons");
-            checkIcon.classList.add("success-check");
-            container.appendChild(checkButton);
-            
-            // Replace with open button after animation
-            setTimeout(() => {
-                container.innerHTML = "";
-                const openButton = createActionButton("open_in_new", () => {
-                    window.open(fileUrl, "_blank");
-                }, "Open file");
-                openButton.classList.add("open-file");
-                container.appendChild(openButton);
-            }, 2000);
-            
         } catch (error) {
-            console.error("Download error:", error);
-            showNotification(`Failed to download ${fileInfo.name}: ${error.message}`, "error");
-            
-            // Restore download button
-            container.innerHTML = "";
-            container.appendChild(createActionButton("download", downloadButton.onclick, "Download file"));
+            console.error('Error downloading file:', error);
+            showNotification('Failed to download file: ' + error.message, 'error');
         }
-    }, "Download file");
+    };
     
-    container.appendChild(downloadButton);
-    return container;
+    li.appendChild(icon);
+    li.appendChild(info);
+    li.appendChild(downloadBtn);
+    
+    // Add to the beginning of the list for newest first
+    if (listElement.firstChild) {
+        listElement.insertBefore(li, listElement.firstChild);
+    } else {
+        listElement.appendChild(li);
+    }
+    
+    console.log('File list updated successfully');
 }
+
+// Add function to get appropriate file icon
+function getFileIcon(mimeType) {
+    if (!mimeType) return 'insert_drive_file';
+    
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('video/')) return 'movie';
+    if (mimeType.startsWith('audio/')) return 'audiotrack';
+    if (mimeType.includes('pdf')) return 'picture_as_pdf';
+    if (mimeType.includes('word') || mimeType.includes('document')) return 'description';
+    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_chart';
+    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'slideshow';
+    if (mimeType.includes('text/')) return 'text_snippet';
+    if (mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
+    
+    return 'insert_drive_file';
+}
+
+// Add event listeners for recent peers
+elements.remotePeerId.addEventListener('focus', () => {
+    if (recentPeers.length > 0) {
+        elements.recentPeers.classList.remove('hidden');
+    }
+});
+
+elements.remotePeerId.addEventListener('blur', (e) => {
+    // Delay hiding to allow for click events on the list
+    setTimeout(() => {
+        elements.recentPeers.classList.add('hidden');
+    }, 200);
+});
+
+elements.clearPeers.addEventListener('click', () => {
+    recentPeers = [];
+    saveRecentPeers();
+    updateRecentPeersList();
+    elements.recentPeers.classList.add('hidden');
+});
 
 // Initialize connection keep-alive system
 function initConnectionKeepAlive() {
@@ -1528,6 +1462,23 @@ async function initiateSimultaneousDownload(fileInfo) {
             originalDataHandler(data);
         }
     });
+}
+
+// Update the download button click handler
+function createDownloadButton(fileInfo) {
+    const downloadButton = document.createElement('button');
+    downloadButton.textContent = 'Download';
+    downloadButton.classList.add('download-button');
+    downloadButton.onclick = async () => {
+        try {
+            showNotification(`Starting download of ${fileInfo.fileName}...`);
+            await initiateSimultaneousDownload(fileInfo);
+        } catch (error) {
+            console.error('Error initiating simultaneous download:', error);
+            showNotification(`Failed to download ${fileInfo.fileName}: ${error.message}`, 'error');
+        }
+    };
+    return downloadButton;
 }
 
 init();

@@ -14,6 +14,20 @@ const MESSAGE_TYPES = {
     SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
 };
 
+// Utility Functions
+// Format bytes to human readable size
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 // DOM Elements
 const elements = {
     peerId: document.getElementById('peer-id'),
@@ -1629,19 +1643,6 @@ async function requestAndDownloadBlob(fileInfo, onProgress) {
         onProgress(progress);
     }
     // ... rest of the existing code ...
-}
-
-// Format bytes to human readable size
-function formatBytes(bytes, decimals = 2) {
-    if (bytes === 0) return '0 Bytes';
-
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
 init();

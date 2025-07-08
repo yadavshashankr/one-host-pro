@@ -1288,19 +1288,38 @@ function createDownloadButton(fileInfo) {
     // Create initial download button
     const downloadButton = createActionButton("download", async () => {
         try {
-            // Replace download button with progress indicator
-            container.innerHTML = "";
+            // Create progress container first
             const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
-            container.appendChild(progressContainer);
+            
+            // Create a wrapper for the progress indicator
+            const progressWrapper = document.createElement("div");
+            progressWrapper.classList.add("progress-wrapper");
+            progressWrapper.appendChild(progressContainer);
+            
+            // Replace download button with progress wrapper
+            container.innerHTML = "";
+            container.appendChild(progressWrapper);
+            
+            // Force a reflow to ensure the progress circle is properly initialized
+            progressWrapper.offsetHeight;
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                console.log('Download progress:', progress);
-                updateCircularProgress(progressCircle, circumference, progress);
+                console.log('Download progress update:', progress);
+                // Use requestAnimationFrame to ensure smooth updates
+                requestAnimationFrame(() => {
+                    const offset = circumference - ((progress / 100) * circumference);
+                    progressCircle.style.strokeDasharray = `${circumference}`;
+                    progressCircle.style.strokeDashoffset = `${offset}`;
+                    console.log('Updated progress circle:', { progress, offset, circumference });
+                });
             });
             
             // Ensure final progress is shown
-            updateCircularProgress(progressCircle, circumference, 100);
+            requestAnimationFrame(() => {
+                progressCircle.style.strokeDasharray = `${circumference}`;
+                progressCircle.style.strokeDashoffset = "0";
+            });
             
             // Store the downloaded file
             const fileUrl = URL.createObjectURL(blob);

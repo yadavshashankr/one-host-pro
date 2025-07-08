@@ -793,42 +793,60 @@ function updateTransferInfo(message) {
 
 // Add file to history
 function addFileToHistory(fileInfo, type) {
-    const fileId = fileInfo.id || generateFileId(fileInfo);
+    const list = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     
-    // Determine the correct type based on who shared the file
-    const actualType = fileInfo.sharedBy === peer.id ? 'sent' : 'received';
+    // Check if file already exists in the list
+    const existingItem = Array.from(list.children).find(item => {
+        const fileName = item.querySelector('.file-name').textContent;
+        const fileSize = item.querySelector('.file-size').textContent;
+        return fileName === fileInfo.name && fileSize === formatBytes(fileInfo.size);
+    });
     
-    // Remove from both history sets to prevent duplicates
-    fileHistory.sent.delete(fileId);
-    fileHistory.received.delete(fileId);
-    
-    // Add to the correct history set
-    fileHistory[actualType].add(fileId);
-    
-    // Remove existing entries from UI if any
-    const sentList = elements.sentFilesList;
-    const receivedList = elements.receivedFilesList;
-    
-    // Remove from sent list if exists
-    const existingInSent = sentList.querySelector(`[data-file-id="${fileId}"]`);
-    if (existingInSent) {
-        existingInSent.remove();
+    if (existingItem) {
+        // If file exists and is not downloaded, don't create a new item
+        if (!existingItem.classList.contains('downloaded')) {
+            return;
+        }
     }
     
-    // Remove from received list if exists
-    const existingInReceived = receivedList.querySelector(`[data-file-id="${fileId}"]`);
-    if (existingInReceived) {
-        existingInReceived.remove();
+    const listItem = document.createElement('li');
+    
+    // File icon
+    const fileIcon = document.createElement('span');
+    fileIcon.classList.add('material-icons');
+    fileIcon.textContent = 'description';
+    
+    // File info
+    const fileInfoDiv = document.createElement('div');
+    fileInfoDiv.classList.add('file-info');
+    
+    const fileName = document.createElement('span');
+    fileName.classList.add('file-name');
+    fileName.textContent = fileInfo.name;
+    
+    const fileSize = document.createElement('span');
+    fileSize.classList.add('file-size');
+    fileSize.textContent = formatBytes(fileInfo.size);
+    
+    const sharedBy = document.createElement('span');
+    sharedBy.classList.add('shared-by');
+    sharedBy.textContent = `${type === 'sent' ? 'Shared with' : 'Shared by'}: ${fileInfo.sharedBy || 'Unknown'}`;
+    
+    fileInfoDiv.appendChild(fileName);
+    fileInfoDiv.appendChild(fileSize);
+    fileInfoDiv.appendChild(sharedBy);
+    
+    // Add elements to list item
+    listItem.appendChild(fileIcon);
+    listItem.appendChild(fileInfoDiv);
+    
+    // Add download/action button for received files
+    if (type === 'received') {
+        listItem.appendChild(createDownloadButton(fileInfo));
     }
     
-    // Update UI with the correct list
-    const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
-    updateFilesList(listElement, fileInfo, actualType);
-
-    // Only broadcast updates for files we send originally
-    if (fileInfo.sharedBy === peer.id) {
-        broadcastFileUpdate(fileInfo);
-    }
+    // Add to list
+    list.appendChild(listItem);
 }
 
 // Broadcast file update to all peers
@@ -1190,117 +1208,119 @@ function updateConnectionStatus(status, message) {
     }
 }
 
-// Update files list display
-function updateFilesList(listElement, fileInfo, type) {
-    console.log('Updating files list:', { type, fileInfo });
+// Create circular progress indicator
+function createCircularProgress() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     
-    // Check if file already exists in this list
-    const existingFile = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
-    if (existingFile) {
-        console.log('File already exists in list, updating...');
-        existingFile.remove();
-    }
+    svg.setAttribute("viewBox", "0 0 24 24");
+    
+    // Set common circle attributes
+    const radius = 8;
+    const circumference = 2 * Math.PI * radius;
+    
+    // Background circle
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", radius.toString());
+    circle.classList.add("progress-bg");
+    
+    // Progress circle
+    progressCircle.setAttribute("cx", "12");
+    progressCircle.setAttribute("cy", "12");
+    progressCircle.setAttribute("r", radius.toString());
+    progressCircle.classList.add("progress-bar");
+    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+    progressCircle.style.strokeDashoffset = `${circumference}`;
+    
+    svg.appendChild(circle);
+    svg.appendChild(progressCircle);
+    
+    const container = document.createElement("div");
+    container.classList.add("circular-progress");
+    container.appendChild(svg);
+    
+    return { container, progressCircle, circumference };
+}
 
-    const li = document.createElement('li');
-    li.className = 'file-item';
-    li.setAttribute('data-file-id', fileInfo.id);
-    
-    const icon = document.createElement('span');
-    icon.className = 'material-icons';
-    icon.textContent = getFileIcon(fileInfo.type);
-    
-    const info = document.createElement('div');
-    info.className = 'file-info';
-    
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'file-name';
-    nameSpan.textContent = fileInfo.name;
-    
-    const sizeSpan = document.createElement('span');
-    sizeSpan.className = 'file-size';
-    sizeSpan.textContent = formatFileSize(fileInfo.size);
+// Update circular progress
+function updateCircularProgress(progressCircle, circumference, progress) {
+    const percent = Math.min(Math.max(progress, 0), 100);
+    const offset = circumference - (percent / 100 * circumference);
+    progressCircle.style.strokeDashoffset = `${offset}`;
+}
 
-    const sharedBySpan = document.createElement('span');
-    sharedBySpan.className = 'shared-by';
-    sharedBySpan.textContent = type === 'sent' ? 
-        'Sent to connected peers' : 
-        `Received from peer ${fileInfo.sharedBy || 'Unknown'}`;
+// Create action button
+function createActionButton(icon, action, title = "") {
+    const button = document.createElement("button");
+    button.classList.add("file-action");
+    button.title = title;
+    button.innerHTML = `<span class="material-icons">${icon}</span>`;
+    button.onclick = action;
+    return button;
+}
+
+// Create download button with progress
+function createDownloadButton(fileInfo) {
+    const container = document.createElement("div");
+    container.classList.add("file-actions");
     
-    info.appendChild(nameSpan);
-    info.appendChild(sizeSpan);
-    info.appendChild(sharedBySpan);
-    
-    const downloadBtn = document.createElement('button');
-    downloadBtn.className = 'icon-button';
-    downloadBtn.title = 'Download file';
-    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
-    downloadBtn.onclick = async () => {
+    // Create initial download button
+    const downloadButton = createActionButton("download", async () => {
         try {
-            if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
-                // For sent files, we have the blob locally
-                const blob = sentFileBlobs.get(fileInfo.id);
-                downloadBlob(blob, fileInfo.name);
-            } else {
-                // For received files, request the blob from the original sender
-                await requestAndDownloadBlob(fileInfo);
+            // Replace download button with progress indicator
+            container.innerHTML = "";
+            const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
+            container.appendChild(progressContainer);
+            
+            // Start download with progress updates
+            const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
+                requestAnimationFrame(() => {
+                    updateCircularProgress(progressCircle, circumference, progress);
+                });
+            });
+            
+            // Store the downloaded file
+            const fileUrl = URL.createObjectURL(blob);
+            fileInfo.localUrl = fileUrl;
+            
+            // Add downloaded class to list item
+            const listItem = container.closest("li");
+            if (listItem) {
+                listItem.classList.add("downloaded");
             }
+            
+            // Show success checkmark
+            container.innerHTML = "";
+            const checkButton = createActionButton("check_circle", null);
+            const checkIcon = checkButton.querySelector(".material-icons");
+            checkIcon.classList.add("success-check");
+            container.appendChild(checkButton);
+            
+            // Replace with open button after animation
+            setTimeout(() => {
+                container.innerHTML = "";
+                const openButton = createActionButton("open_in_new", () => {
+                    window.open(fileUrl, "_blank");
+                }, "Open file");
+                openButton.classList.add("open-file");
+                container.appendChild(openButton);
+            }, 2000); // Changed to 2 seconds as requested
+            
         } catch (error) {
-            console.error('Error downloading file:', error);
-            showNotification('Failed to download file: ' + error.message, 'error');
+            console.error("Download error:", error);
+            showNotification(`Failed to download ${fileInfo.name}: ${error.message}`, "error");
+            
+            // Restore download button
+            container.innerHTML = "";
+            container.appendChild(createActionButton("download", downloadButton.onclick, "Download file"));
         }
-    };
+    }, "Download file");
     
-    li.appendChild(icon);
-    li.appendChild(info);
-    li.appendChild(downloadBtn);
-    
-    // Add to the beginning of the list for newest first
-    if (listElement.firstChild) {
-        listElement.insertBefore(li, listElement.firstChild);
-    } else {
-        listElement.appendChild(li);
-    }
-    
-    console.log('File list updated successfully');
+    container.appendChild(downloadButton);
+    return container;
 }
-
-// Add function to get appropriate file icon
-function getFileIcon(mimeType) {
-    if (!mimeType) return 'insert_drive_file';
-    
-    if (mimeType.startsWith('image/')) return 'image';
-    if (mimeType.startsWith('video/')) return 'movie';
-    if (mimeType.startsWith('audio/')) return 'audiotrack';
-    if (mimeType.includes('pdf')) return 'picture_as_pdf';
-    if (mimeType.includes('word') || mimeType.includes('document')) return 'description';
-    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_chart';
-    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'slideshow';
-    if (mimeType.includes('text/')) return 'text_snippet';
-    if (mimeType.includes('zip') || mimeType.includes('archive')) return 'folder_zip';
-    
-    return 'insert_drive_file';
-}
-
-// Add event listeners for recent peers
-elements.remotePeerId.addEventListener('focus', () => {
-    if (recentPeers.length > 0) {
-        elements.recentPeers.classList.remove('hidden');
-    }
-});
-
-elements.remotePeerId.addEventListener('blur', (e) => {
-    // Delay hiding to allow for click events on the list
-    setTimeout(() => {
-        elements.recentPeers.classList.add('hidden');
-    }, 200);
-});
-
-elements.clearPeers.addEventListener('click', () => {
-    recentPeers = [];
-    saveRecentPeers();
-    updateRecentPeersList();
-    elements.recentPeers.classList.add('hidden');
-});
 
 // Initialize connection keep-alive system
 function initConnectionKeepAlive() {
@@ -1508,163 +1528,6 @@ async function initiateSimultaneousDownload(fileInfo) {
             originalDataHandler(data);
         }
     });
-}
-
-// Create circular progress indicator
-function createCircularProgress() {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    
-    svg.setAttribute("viewBox", "0 0 24 24");
-    
-    // Set common circle attributes
-    const radius = 8;
-    const circumference = 2 * Math.PI * radius;
-    
-    // Background circle
-    circle.setAttribute("cx", "12");
-    circle.setAttribute("cy", "12");
-    circle.setAttribute("r", radius.toString());
-    circle.classList.add("progress-bg");
-    
-    // Progress circle
-    progressCircle.setAttribute("cx", "12");
-    progressCircle.setAttribute("cy", "12");
-    progressCircle.setAttribute("r", radius.toString());
-    progressCircle.classList.add("progress-bar");
-    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
-    progressCircle.style.strokeDashoffset = `${circumference}`;
-    
-    svg.appendChild(circle);
-    svg.appendChild(progressCircle);
-    
-    const container = document.createElement("div");
-    container.classList.add("circular-progress");
-    container.appendChild(svg);
-    
-    return { container, progressCircle, circumference };
-}
-
-// Update circular progress
-function updateCircularProgress(progressCircle, circumference, progress) {
-    const percent = Math.min(Math.max(progress, 0), 100);
-    const offset = circumference - (percent / 100 * circumference);
-    progressCircle.style.strokeDashoffset = `${offset}`;
-}
-
-// Create action button
-function createActionButton(icon, action, title = "") {
-    const button = document.createElement("button");
-    button.classList.add("file-action");
-    button.title = title;
-    button.innerHTML = `<span class="material-icons">${icon}</span>`;
-    button.onclick = action;
-    return button;
-}
-
-// Create download button with progress
-function createDownloadButton(fileInfo) {
-    const container = document.createElement("div");
-    container.classList.add("file-actions");
-    
-    // Create initial download button
-    const downloadButton = createActionButton("download", async () => {
-        try {
-            // Replace download button with progress indicator
-            container.innerHTML = "";
-            const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
-            container.appendChild(progressContainer);
-            
-            // Start download with progress updates
-            const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                requestAnimationFrame(() => {
-                    updateCircularProgress(progressCircle, circumference, progress);
-                });
-            });
-            
-            // Show success checkmark
-            container.innerHTML = "";
-            const checkButton = createActionButton("check_circle", null);
-            const checkIcon = checkButton.querySelector(".material-icons");
-            checkIcon.classList.add("success-check");
-            container.appendChild(checkButton);
-            
-            // Store the downloaded file
-            const fileUrl = URL.createObjectURL(blob);
-            fileInfo.localUrl = fileUrl;
-            
-            // Add downloaded class to list item
-            const listItem = container.closest("li");
-            if (listItem) {
-                listItem.classList.add("downloaded");
-            }
-            
-            // Replace with open button after animation
-            setTimeout(() => {
-                container.innerHTML = "";
-                const openButton = createActionButton("open_in_new", () => {
-                    window.open(fileUrl, "_blank");
-                }, "Open file");
-                openButton.classList.add("open-file");
-                container.appendChild(openButton);
-            }, 1000);
-            
-        } catch (error) {
-            console.error("Download error:", error);
-            showNotification(`Failed to download ${fileInfo.name}: ${error.message}`, "error");
-            
-            // Restore download button
-            container.innerHTML = "";
-            container.appendChild(createActionButton("download", downloadButton.onclick, "Download file"));
-        }
-    }, "Download file");
-    
-    container.appendChild(downloadButton);
-    return container;
-}
-
-// Update addFileToHistory function
-function addFileToHistory(fileInfo, type) {
-    const list = type === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
-    const listItem = document.createElement('li');
-    
-    // File icon
-    const fileIcon = document.createElement('span');
-    fileIcon.classList.add('material-icons');
-    fileIcon.textContent = 'description';
-    
-    // File info
-    const fileInfoDiv = document.createElement('div');
-    fileInfoDiv.classList.add('file-info');
-    
-    const fileName = document.createElement('span');
-    fileName.classList.add('file-name');
-    fileName.textContent = fileInfo.name;
-    
-    const fileSize = document.createElement('span');
-    fileSize.classList.add('file-size');
-    fileSize.textContent = formatBytes(fileInfo.size);
-    
-    const sharedBy = document.createElement('span');
-    sharedBy.classList.add('shared-by');
-    sharedBy.textContent = `${type === 'sent' ? 'Shared with' : 'Shared by'}: ${fileInfo.sharedBy || 'Unknown'}`;
-    
-    fileInfoDiv.appendChild(fileName);
-    fileInfoDiv.appendChild(fileSize);
-    fileInfoDiv.appendChild(sharedBy);
-    
-    // Add elements to list item
-    listItem.appendChild(fileIcon);
-    listItem.appendChild(fileInfoDiv);
-    
-    // Add download/action button for received files
-    if (type === 'received') {
-        listItem.appendChild(createDownloadButton(fileInfo));
-    }
-    
-    // Add to list
-    list.appendChild(listItem);
 }
 
 init();

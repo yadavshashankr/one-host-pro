@@ -38,12 +38,7 @@ const elements = {
     receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
     recentPeersList: document.getElementById('recent-peers-list'),
-    clearPeers: document.getElementById('clear-peers'),
-    // Add new elements for peer ID editing
-    peerIdEdit: document.getElementById('peer-id-edit'),
-    editIdButton: document.getElementById('edit-id'),
-    saveIdButton: document.getElementById('save-id'),
-    cancelEditButton: document.getElementById('cancel-edit')
+    clearPeers: document.getElementById('clear-peers')
 };
 
 // State
@@ -1115,7 +1110,6 @@ function init() {
     loadRecentPeers();
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
-    initPeerIdEditing(); // Initialize peer ID editing
 }
 
 // Add CSS classes for notification styling
@@ -1166,7 +1160,6 @@ function updateConnectionStatus(status, message) {
     } else {
         document.title = 'One-Host';
     }
-    updateEditButtonState(); // Add this line
 }
 
 // Update files list display
@@ -1526,109 +1519,6 @@ function createDownloadButton(fileInfo) {
         }
     };
     return downloadButton;
-}
-
-// Check if peer ID editing is allowed
-function isEditingAllowed() {
-    const statusText = elements.statusText.textContent;
-    const hasConnections = connections.size > 0;
-    return statusText === 'Ready to connect' && !hasConnections;
-}
-
-// Update edit button state based on connection status
-function updateEditButtonState() {
-    if (elements.editIdButton) {
-        const canEdit = isEditingAllowed();
-        elements.editIdButton.disabled = !canEdit;
-        elements.editIdButton.title = canEdit ? 'Edit ID' : 'Cannot edit ID while connected';
-    }
-}
-
-// Start editing peer ID
-function startEditingPeerId() {
-    if (!isEditingAllowed()) return;
-    
-    const currentId = elements.peerId.textContent;
-    elements.peerIdEdit.value = currentId;
-    
-    elements.peerId.classList.add('hidden');
-    elements.peerIdEdit.classList.remove('hidden');
-    elements.editIdButton.classList.add('hidden');
-    elements.saveIdButton.classList.remove('hidden');
-    elements.cancelEditButton.classList.remove('hidden');
-    elements.peerIdEdit.focus();
-}
-
-// Save edited peer ID
-async function saveEditedPeerId() {
-    const newPeerId = elements.peerIdEdit.value.trim();
-    
-    if (!newPeerId) {
-        showNotification('Peer ID cannot be empty', 'error');
-        return;
-    }
-    
-    try {
-        // Disconnect current peer
-        if (peer) {
-            peer.destroy();
-        }
-        
-        // Initialize new peer with custom ID
-        peer = new Peer(newPeerId, {
-            debug: 2,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' }
-                ]
-            }
-        });
-        
-        // Setup peer event handlers
-        setupPeerHandlers();
-        
-        // Update UI
-        elements.peerId.textContent = newPeerId;
-        cancelEditingPeerId();
-        
-        // Generate new QR code
-        generateQRCode(newPeerId);
-        
-        showNotification('Peer ID updated successfully', 'success');
-    } catch (error) {
-        console.error('Error updating peer ID:', error);
-        showNotification('Failed to update peer ID', 'error');
-    }
-}
-
-// Cancel editing peer ID
-function cancelEditingPeerId() {
-    elements.peerId.classList.remove('hidden');
-    elements.peerIdEdit.classList.add('hidden');
-    elements.editIdButton.classList.remove('hidden');
-    elements.saveIdButton.classList.add('hidden');
-    elements.cancelEditButton.classList.add('hidden');
-}
-
-// Initialize peer ID editing
-function initPeerIdEditing() {
-    if (elements.editIdButton) {
-        elements.editIdButton.addEventListener('click', startEditingPeerId);
-    }
-    if (elements.saveIdButton) {
-        elements.saveIdButton.addEventListener('click', saveEditedPeerId);
-    }
-    if (elements.cancelEditButton) {
-        elements.cancelEditButton.addEventListener('click', cancelEditingPeerId);
-    }
-    if (elements.peerIdEdit) {
-        elements.peerIdEdit.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                saveEditedPeerId();
-            }
-        });
-    }
 }
 
 init();

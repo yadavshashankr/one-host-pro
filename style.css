@@ -531,39 +531,3 @@ input[type="file"] {
 .icon-button.download-completed {
     color: #4CAF50;  /* Green color for completed icon */
 }
-
-/* Peer ID editing styles */
-.peer-id-display {
-    display: flex;
-    align-items: center;
-    flex: 1;
-}
-
-.peer-id-edit {
-    font-size: 1rem;
-    padding: 4px 8px;
-    border: 2px solid var(--primary-color);
-    border-radius: 4px;
-    background: var(--background-color);
-    color: var(--text-color);
-    width: 100%;
-    max-width: 200px;
-}
-
-.peer-id-edit.hidden {
-    display: none;
-}
-
-#peer-id.hidden {
-    display: none;
-}
-
-.icon-button.hidden {
-    display: none;
-}
-
-/* Disabled edit button state */
-.icon-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}

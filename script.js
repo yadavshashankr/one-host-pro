@@ -1518,21 +1518,22 @@ function createCircularProgress() {
     
     svg.setAttribute("viewBox", "0 0 24 24");
     
+    // Set common circle attributes
+    const radius = 8;
+    const circumference = 2 * Math.PI * radius;
+    
     // Background circle
     circle.setAttribute("cx", "12");
     circle.setAttribute("cy", "12");
-    circle.setAttribute("r", "10");
+    circle.setAttribute("r", radius.toString());
     circle.classList.add("progress-bg");
     
     // Progress circle
     progressCircle.setAttribute("cx", "12");
     progressCircle.setAttribute("cy", "12");
-    progressCircle.setAttribute("r", "10");
+    progressCircle.setAttribute("r", radius.toString());
     progressCircle.classList.add("progress-bar");
-    
-    // Calculate circle properties
-    const circumference = 2 * Math.PI * 10;
-    progressCircle.style.strokeDasharray = `${circumference}`;
+    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
     progressCircle.style.strokeDashoffset = `${circumference}`;
     
     svg.appendChild(circle);
@@ -1547,7 +1548,8 @@ function createCircularProgress() {
 
 // Update circular progress
 function updateCircularProgress(progressCircle, circumference, progress) {
-    const offset = circumference - (progress / 100 * circumference);
+    const percent = Math.min(Math.max(progress, 0), 100);
+    const offset = circumference - (percent / 100 * circumference);
     progressCircle.style.strokeDashoffset = `${offset}`;
 }
 
@@ -1574,7 +1576,7 @@ function createDownloadButton(fileInfo) {
             const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
             container.appendChild(progressContainer);
             
-            // Start download
+            // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
                 requestAnimationFrame(() => {
                     updateCircularProgress(progressCircle, circumference, progress);

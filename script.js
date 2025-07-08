@@ -491,8 +491,26 @@ async function handleFileComplete(data) {
             }
 
             // Create download URL and trigger download
-            downloadBlob(blob, fileData.fileName);
+            downloadBlob(blob, fileData.fileName, data.fileId);
             showNotification(`Downloaded ${fileData.fileName}`, 'success');
+
+            // Update UI to show completed state
+            const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
+            if (listItem) {
+                listItem.classList.add('download-completed');
+                const downloadButton = listItem.querySelector('.icon-button');
+                if (downloadButton) {
+                    downloadButton.classList.add('download-completed');
+                    downloadButton.innerHTML = '<span class="material-icons">open_in_new</span>';
+                    downloadButton.title = 'Open file';
+                    
+                    // Store the blob URL for opening the file
+                    const blobUrl = URL.createObjectURL(blob);
+                    downloadButton.onclick = () => {
+                        window.open(blobUrl, '_blank');
+                    };
+                }
+            }
         }
 
         // Create file info object
@@ -1193,7 +1211,7 @@ function updateFilesList(listElement, fileInfo, type) {
             if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
                 // For sent files, we have the blob locally
                 const blob = sentFileBlobs.get(fileInfo.id);
-                downloadBlob(blob, fileInfo.name);
+                downloadBlob(blob, fileInfo.name, fileInfo.id);
             } else {
                 // For received files, request the blob from the original sender
                 await requestAndDownloadBlob(fileInfo);
@@ -1373,7 +1391,7 @@ function reconnectToPeer(peerId) {
 }
 
 // Function to download a blob
-function downloadBlob(blob, fileName) {
+function downloadBlob(blob, fileName, fileId) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1381,6 +1399,28 @@ function downloadBlob(blob, fileName) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+
+    // If fileId is provided, update the UI
+    if (fileId) {
+        const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
+        if (listItem) {
+            listItem.classList.add('download-completed');
+            const downloadButton = listItem.querySelector('.icon-button');
+            if (downloadButton) {
+                downloadButton.classList.add('download-completed');
+                downloadButton.innerHTML = '<span class="material-icons">open_in_new</span>';
+                downloadButton.title = 'Open file';
+                
+                // Store the blob URL for opening the file
+                const openUrl = URL.createObjectURL(blob);
+                downloadButton.onclick = () => {
+                    window.open(openUrl, '_blank');
+                };
+            }
+        }
+    }
+
+    // Cleanup the download URL
     setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 

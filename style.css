@@ -312,7 +312,7 @@ input[type="file"] {
     background: var(--background-color);
     border-radius: 8px;
     margin-bottom: 8px;
-    transition: background-color 0.2s;
+    transition: background-color 0.2s, background 0.3s ease;
 }
 
 .files-list li:hover {
@@ -521,4 +521,13 @@ input[type="file"] {
     .download-button {
         margin-top: 10px;
     }
+}
+
+/* Download completed styles */
+.files-list li.download-completed {
+    background: rgba(76, 175, 80, 0.1);  /* Light green background */
+}
+
+.icon-button.download-completed {
+    color: #4CAF50;  /* Green color for completed icon */
 }

@@ -1243,6 +1243,7 @@ function createCircularProgress() {
     container.classList.add("circular-progress");
     container.appendChild(svg);
     
+    console.log('Created progress circle with circumference:', circumference);
     return { container, progressCircle, circumference };
 }
 
@@ -1251,14 +1252,32 @@ function updateCircularProgress(progressCircle, circumference, progress) {
     // Ensure progress is between 0 and 100
     const normalizedProgress = Math.min(Math.max(progress, 0), 100);
     
-    // Calculate the offset
-    const offset = circumference - (normalizedProgress / 100 * circumference);
+    // Calculate the offset (reverse the direction for proper fill)
+    const offset = circumference - ((normalizedProgress / 100) * circumference);
+    
+    console.log('Updating progress:', {
+        progress: normalizedProgress,
+        circumference,
+        offset,
+        currentDashArray: progressCircle.style.strokeDasharray,
+        currentOffset: progressCircle.style.strokeDashoffset
+    });
     
     // Update the progress circle
-    requestAnimationFrame(() => {
-        progressCircle.style.strokeDasharray = `${circumference}`;
-        progressCircle.style.strokeDashoffset = `${offset}`;
-    });
+    progressCircle.style.strokeDasharray = `${circumference}`;
+    progressCircle.style.strokeDashoffset = `${offset}`;
+}
+
+// Create action button
+function createActionButton(icon, action, title = "") {
+    const button = document.createElement("button");
+    button.classList.add("file-action");
+    button.title = title;
+    button.innerHTML = `<span class="material-icons">${icon}</span>`;
+    if (action) {
+        button.onclick = action;
+    }
+    return button;
 }
 
 // Create download button with progress
@@ -1274,16 +1293,10 @@ function createDownloadButton(fileInfo) {
             const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
             container.appendChild(progressContainer);
             
-            let lastProgress = 0;
-            const updateThreshold = 2; // Only update if progress changed by 2%
-            
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                // Only update if progress has changed significantly
-                if (Math.abs(progress - lastProgress) >= updateThreshold) {
-                    updateCircularProgress(progressCircle, circumference, progress);
-                    lastProgress = progress;
-                }
+                console.log('Download progress:', progress);
+                updateCircularProgress(progressCircle, circumference, progress);
             });
             
             // Ensure final progress is shown

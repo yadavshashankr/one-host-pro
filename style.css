@@ -555,8 +555,6 @@ input[type="file"] {
     stroke-width: 2.5;
     stroke-linecap: round;
     transform-origin: center;
-    transform: rotate(-90deg);
-    transition: stroke-dashoffset 0.1s linear;
 }
 
 .circular-progress .progress-bg {
@@ -565,7 +563,9 @@ input[type="file"] {
 
 .circular-progress .progress-bar {
     stroke: #2196F3;
-    transition: stroke-dashoffset 0.1s linear;
+    transform-origin: center;
+    transition: stroke-dashoffset 0.1s ease;
+    will-change: stroke-dashoffset;
 }
 
 /* Success animation */

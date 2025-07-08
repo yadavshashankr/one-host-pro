@@ -312,7 +312,12 @@ input[type="file"] {
     background: var(--background-color);
     border-radius: 8px;
     margin-bottom: 8px;
-    transition: background-color 0.2s;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+.files-list li.downloaded {
+    background-color: rgba(76, 175, 80, 0.1);
 }
 
 .files-list li:hover {
@@ -514,11 +519,128 @@ input[type="file"] {
     }
 
     .files-list li {
-        flex-direction: column;
-        text-align: center;
+        padding: 10px;
     }
 
     .download-button {
         margin-top: 10px;
+    }
+}
+
+/* File actions and progress */
+.file-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.circular-progress {
+    position: relative;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.circular-progress svg {
+    position: absolute;
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+}
+
+.circular-progress circle {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transform-origin: center;
+}
+
+.circular-progress .progress-bg {
+    stroke: var(--border-color);
+}
+
+.circular-progress .progress-bar {
+    stroke: var(--primary-color);
+    transition: stroke-dashoffset 0.3s ease;
+}
+
+.file-action {
+    background: none;
+    border: none;
+    padding: 8px;
+    cursor: pointer;
+    color: var(--primary-color);
+    border-radius: 50%;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+}
+
+.file-action:hover {
+    background-color: rgba(33, 150, 243, 0.1);
+    transform: scale(1.1);
+}
+
+.file-action:active {
+    transform: scale(0.95);
+}
+
+.file-action .material-icons {
+    font-size: 20px;
+}
+
+/* Success animation */
+@keyframes checkmark {
+    0% { transform: scale(0); opacity: 0; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.success-check {
+    color: var(--success-color);
+    animation: checkmark 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Open file button */
+.file-action.open-file {
+    color: var(--primary-color);
+    opacity: 0;
+    animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+    .files-list li {
+        padding: 10px;
+    }
+    
+    .file-actions {
+        gap: 4px;
+    }
+    
+    .circular-progress {
+        width: 20px;
+        height: 20px;
+    }
+    
+    .file-action {
+        padding: 6px;
+        width: 28px;
+        height: 28px;
+    }
+    
+    .file-action .material-icons {
+        font-size: 18px;
     }
 }

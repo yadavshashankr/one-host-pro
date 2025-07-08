@@ -6,6 +6,14 @@ const STORE_NAME = 'files';
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 60000; // 60 seconds
 
+// Add simultaneous download message types
+const MESSAGE_TYPES = {
+    // ... existing code ...
+    SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
+    SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
+    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
+};
+
 // DOM Elements
 const elements = {
     peerId: document.getElementById('peer-id'),
@@ -311,61 +319,81 @@ function setupConnectionHandlers(conn) {
 
     conn.on('data', async (data) => {
         try {
-            if (data.type === 'connection-notification') {
-                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-            } else if (data.type === 'keep-alive') {
-                // Handle keep-alive message
-                console.log(`Keep-alive received from peer ${conn.peer}`);
-                // Send keep-alive response
-                conn.send({
-                    type: 'keep-alive-response',
-                    timestamp: Date.now(),
-                    peerId: peer.id
-                });
-            } else if (data.type === 'keep-alive-response') {
-                // Handle keep-alive response
-                console.log(`Keep-alive response received from peer ${conn.peer}`);
-            } else if (data.type === 'disconnect-notification') {
-                // Handle disconnect notification
-                console.log(`Disconnect notification received from peer ${conn.peer}`);
-                connections.delete(conn.peer);
-                updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                    connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-                showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-            } else if (data.type === 'file-info') {
-                // Handle file info without blob
-                const fileInfo = {
-                    name: data.fileName,
-                    type: data.fileType,
-                    size: data.fileSize,
-                    id: data.fileId,
-                    sharedBy: data.originalSender
-                };
-                // Add to history if not already present
-                if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-                    addFileToHistory(fileInfo, 'received');
-                    
-                    // If this is the host, forward to other peers
-                    if (connections.size > 1) {
-                        await forwardFileInfoToPeers(fileInfo, data.fileId);
+            switch (data.type) {
+                case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
+                    await handleSimultaneousDownloadRequest(data, conn);
+                    break;
+                case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_START:
+                    await requestAndDownloadBlob(data);
+                    break;
+                case 'connection-notification':
+                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    break;
+                case 'keep-alive':
+                    // Handle keep-alive message
+                    console.log(`Keep-alive received from peer ${conn.peer}`);
+                    // Send keep-alive response
+                    conn.send({
+                        type: 'keep-alive-response',
+                        timestamp: Date.now(),
+                        peerId: peer.id
+                    });
+                    break;
+                case 'keep-alive-response':
+                    // Handle keep-alive response
+                    console.log(`Keep-alive response received from peer ${conn.peer}`);
+                    break;
+                case 'disconnect-notification':
+                    // Handle disconnect notification
+                    console.log(`Disconnect notification received from peer ${conn.peer}`);
+                    connections.delete(conn.peer);
+                    updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+                        connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+                    showNotification(`Peer ${conn.peer} disconnected`, 'warning');
+                    break;
+                case 'file-info':
+                    // Handle file info without blob
+                    const fileInfo = {
+                        name: data.fileName,
+                        type: data.fileType,
+                        size: data.fileSize,
+                        id: data.fileId,
+                        sharedBy: data.originalSender
+                    };
+                    // Add to history if not already present
+                    if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+                        addFileToHistory(fileInfo, 'received');
+                        
+                        // If this is the host, forward to other peers
+                        if (connections.size > 1) {
+                            await forwardFileInfoToPeers(fileInfo, data.fileId);
+                        }
                     }
-                }
-            } else if (data.type === 'file-header') {
-                await handleFileHeader(data);
-            } else if (data.type === 'file-chunk') {
-                await handleFileChunk(data);
-            } else if (data.type === 'file-complete') {
-                await handleFileComplete(data);
-            } else if (data.type === 'blob-request') {
-                // Handle direct blob request
-                await handleBlobRequest(data, conn);
-            } else if (data.type === 'blob-request-forwarded') {
-                // Handle forwarded blob request (host only)
-                await handleForwardedBlobRequest(data, conn);
-            } else if (data.type === 'blob-error') {
-                showNotification(`Failed to download file: ${data.error}`, 'error');
-                elements.transferProgress.classList.add('hidden');
-                updateTransferInfo('');
+                    break;
+                case 'file-header':
+                    await handleFileHeader(data);
+                    break;
+                case 'file-chunk':
+                    await handleFileChunk(data);
+                    break;
+                case 'file-complete':
+                    await handleFileComplete(data);
+                    break;
+                case 'blob-request':
+                    // Handle direct blob request
+                    await handleBlobRequest(data, conn);
+                    break;
+                case 'blob-request-forwarded':
+                    // Handle forwarded blob request (host only)
+                    await handleForwardedBlobRequest(data, conn);
+                    break;
+                case 'blob-error':
+                    showNotification(`Failed to download file: ${data.error}`, 'error');
+                    elements.transferProgress.classList.add('hidden');
+                    updateTransferInfo('');
+                    break;
+                default:
+                    console.error('Unknown data type:', data.type);
             }
         } catch (error) {
             console.error('Data handling error:', error);
@@ -1354,6 +1382,103 @@ function downloadBlob(blob, fileName) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+// Function to handle simultaneous download request
+async function handleSimultaneousDownloadRequest(data, conn) {
+    console.log('Received simultaneous download request:', data);
+    const { fileId } = data;
+    
+    // Check if we have the blob
+    const blob = sentFileBlobs.get(fileId);
+    if (!blob) {
+        console.error('Blob not found for file:', fileId);
+        conn.send({
+            type: MESSAGE_TYPES.BLOB_ERROR,
+            fileId: fileId,
+            error: 'File not available'
+        });
+        return;
+    }
+
+    // Send ready signal
+    conn.send({
+        type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY,
+        fileId: fileId,
+        fileSize: blob.size
+    });
+}
+
+// Function to initiate simultaneous download
+async function initiateSimultaneousDownload(fileInfo) {
+    const downloadingPeers = new Set();
+    const readyPeers = new Set();
+    let downloadStarted = false;
+
+    // Function to start download for all ready peers
+    const startDownloadForAll = () => {
+        if (downloadStarted) return;
+        downloadStarted = true;
+        
+        console.log('Starting simultaneous download for all ready peers');
+        for (const [peerId, conn] of connections) {
+            if (readyPeers.has(peerId)) {
+                conn.send({
+                    type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_START,
+                    fileId: fileInfo.fileId
+                });
+            }
+        }
+    };
+
+    // Request download from original sender for all connected peers
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open && peerId === fileInfo.originalSender) {
+            downloadingPeers.add(peerId);
+            conn.send({
+                type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST,
+                fileId: fileInfo.fileId,
+                fileName: fileInfo.fileName
+            });
+        }
+    }
+
+    // Add handlers for simultaneous download coordination
+    const handleReadyResponse = (data, fromPeerId) => {
+        if (data.type === MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY && data.fileId === fileInfo.fileId) {
+            readyPeers.add(fromPeerId);
+            if (readyPeers.size === downloadingPeers.size) {
+                startDownloadForAll();
+            }
+        }
+    };
+
+    // Update connection handler to handle simultaneous downloads
+    const originalDataHandler = conn.dataHandler;
+    conn.on('data', (data) => {
+        if (data.type === MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY) {
+            handleReadyResponse(data, conn.peer);
+        } else {
+            originalDataHandler(data);
+        }
+    });
+}
+
+// Update the download button click handler
+function createDownloadButton(fileInfo) {
+    const downloadButton = document.createElement('button');
+    downloadButton.textContent = 'Download';
+    downloadButton.classList.add('download-button');
+    downloadButton.onclick = async () => {
+        try {
+            showNotification(`Starting download of ${fileInfo.fileName}...`);
+            await initiateSimultaneousDownload(fileInfo);
+        } catch (error) {
+            console.error('Error initiating simultaneous download:', error);
+            showNotification(`Failed to download ${fileInfo.fileName}: ${error.message}`, 'error');
+        }
+    };
+    return downloadButton;
 }
 
 init();

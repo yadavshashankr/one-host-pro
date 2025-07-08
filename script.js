@@ -1231,7 +1231,7 @@ function createCircularProgress() {
     progressCircle.setAttribute("cy", "12");
     progressCircle.setAttribute("r", radius.toString());
     progressCircle.classList.add("progress-bar");
-    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+    progressCircle.style.strokeDasharray = `${circumference}`;
     progressCircle.style.strokeDashoffset = `${circumference}`;
     
     svg.appendChild(circle);
@@ -1248,7 +1248,9 @@ function createCircularProgress() {
 function updateCircularProgress(progressCircle, circumference, progress) {
     const percent = Math.min(Math.max(progress, 0), 100);
     const offset = circumference - (percent / 100 * circumference);
-    progressCircle.style.strokeDashoffset = `${offset}`;
+    requestAnimationFrame(() => {
+        progressCircle.style.strokeDashoffset = `${offset}`;
+    });
 }
 
 // Create action button
@@ -1276,9 +1278,7 @@ function createDownloadButton(fileInfo) {
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                requestAnimationFrame(() => {
-                    updateCircularProgress(progressCircle, circumference, progress);
-                });
+                updateCircularProgress(progressCircle, circumference, progress);
             });
             
             // Store the downloaded file
@@ -1306,7 +1306,7 @@ function createDownloadButton(fileInfo) {
                 }, "Open file");
                 openButton.classList.add("open-file");
                 container.appendChild(openButton);
-            }, 2000); // Changed to 2 seconds as requested
+            }, 2000);
             
         } catch (error) {
             console.error("Download error:", error);

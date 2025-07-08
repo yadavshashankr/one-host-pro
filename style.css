@@ -552,19 +552,18 @@ input[type="file"] {
 
 .circular-progress circle {
     fill: none;
-    stroke-width: 2;
+    stroke-width: 2.5;
     stroke-linecap: round;
 }
 
 .circular-progress .progress-bg {
-    stroke: var(--border-color);
-    opacity: 0.2;
+    stroke: rgba(33, 150, 243, 0.2);
 }
 
 .circular-progress .progress-bar {
     stroke: var(--primary-color);
     transition: stroke-dashoffset 0.2s ease;
-    transform-origin: center;
+    stroke-width: 2.5;
 }
 
 /* Success animation */

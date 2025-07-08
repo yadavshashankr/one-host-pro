@@ -1210,74 +1210,15 @@ function updateConnectionStatus(status, message) {
 
 // Create circular progress indicator
 function createCircularProgress() {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const progressContainer = document.createElement("div");
+    progressContainer.classList.add("progress-wrapper");
     
-    svg.setAttribute("viewBox", "0 0 24 24");
+    const progressCircle = document.createElement("div");
+    progressCircle.classList.add("circular-progress");
+    progressCircle.style.setProperty("--progress", "0%");
     
-    // Set common circle attributes
-    const radius = 8;
-    const circumference = 2 * Math.PI * radius;
-    
-    // Background circle
-    circle.setAttribute("cx", "12");
-    circle.setAttribute("cy", "12");
-    circle.setAttribute("r", radius.toString());
-    circle.classList.add("progress-bg");
-    
-    // Progress circle
-    progressCircle.setAttribute("cx", "12");
-    progressCircle.setAttribute("cy", "12");
-    progressCircle.setAttribute("r", radius.toString());
-    progressCircle.classList.add("progress-bar");
-    
-    // Initialize progress circle with full circumference
-    progressCircle.style.strokeDasharray = `${circumference}`;
-    progressCircle.style.strokeDashoffset = `${circumference}`;
-    
-    svg.appendChild(circle);
-    svg.appendChild(progressCircle);
-    
-    const container = document.createElement("div");
-    container.classList.add("circular-progress");
-    container.appendChild(svg);
-    
-    console.log('Created progress circle with circumference:', circumference);
-    return { container, progressCircle, circumference };
-}
-
-// Update circular progress
-function updateCircularProgress(progressCircle, circumference, progress) {
-    // Ensure progress is between 0 and 100
-    const normalizedProgress = Math.min(Math.max(progress, 0), 100);
-    
-    // Calculate the offset (reverse the direction for proper fill)
-    const offset = circumference - ((normalizedProgress / 100) * circumference);
-    
-    console.log('Updating progress:', {
-        progress: normalizedProgress,
-        circumference,
-        offset,
-        currentDashArray: progressCircle.style.strokeDasharray,
-        currentOffset: progressCircle.style.strokeDashoffset
-    });
-    
-    // Update the progress circle
-    progressCircle.style.strokeDasharray = `${circumference}`;
-    progressCircle.style.strokeDashoffset = `${offset}`;
-}
-
-// Create action button
-function createActionButton(icon, action, title = "") {
-    const button = document.createElement("button");
-    button.classList.add("file-action");
-    button.title = title;
-    button.innerHTML = `<span class="material-icons">${icon}</span>`;
-    if (action) {
-        button.onclick = action;
-    }
-    return button;
+    progressContainer.appendChild(progressCircle);
+    return { container: progressContainer, progressCircle };
 }
 
 // Create download button with progress
@@ -1289,36 +1230,17 @@ function createDownloadButton(fileInfo) {
     const downloadButton = createActionButton("download", async () => {
         try {
             // Create progress container first
-            const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
+            const { container: progressContainer, progressCircle } = createCircularProgress();
             
-            // Create a wrapper for the progress indicator
-            const progressWrapper = document.createElement("div");
-            progressWrapper.classList.add("progress-wrapper");
-            progressWrapper.appendChild(progressContainer);
-            
-            // Replace download button with progress wrapper
+            // Replace download button with progress container
             container.innerHTML = "";
-            container.appendChild(progressWrapper);
-            
-            // Force a reflow to ensure the progress circle is properly initialized
-            progressWrapper.offsetHeight;
+            container.appendChild(progressContainer);
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                console.log('Download progress update:', progress);
-                // Use requestAnimationFrame to ensure smooth updates
-                requestAnimationFrame(() => {
-                    const offset = circumference - ((progress / 100) * circumference);
-                    progressCircle.style.strokeDasharray = `${circumference}`;
-                    progressCircle.style.strokeDashoffset = `${offset}`;
-                    console.log('Updated progress circle:', { progress, offset, circumference });
-                });
-            });
-            
-            // Ensure final progress is shown
-            requestAnimationFrame(() => {
-                progressCircle.style.strokeDasharray = `${circumference}`;
-                progressCircle.style.strokeDashoffset = "0";
+                console.log('Download progress:', progress);
+                // Update progress using CSS custom property
+                progressCircle.style.setProperty("--progress", `${progress}%`);
             });
             
             // Store the downloaded file

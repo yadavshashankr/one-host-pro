@@ -1516,7 +1516,6 @@ function createCircularProgress() {
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     
-    // Set up SVG
     svg.setAttribute("viewBox", "0 0 24 24");
     
     // Background circle
@@ -1533,8 +1532,8 @@ function createCircularProgress() {
     
     // Calculate circle properties
     const circumference = 2 * Math.PI * 10;
-    progressCircle.style.strokeDasharray = circumference;
-    progressCircle.style.strokeDashoffset = circumference;
+    progressCircle.style.strokeDasharray = `${circumference}`;
+    progressCircle.style.strokeDashoffset = `${circumference}`;
     
     svg.appendChild(circle);
     svg.appendChild(progressCircle);
@@ -1549,7 +1548,7 @@ function createCircularProgress() {
 // Update circular progress
 function updateCircularProgress(progressCircle, circumference, progress) {
     const offset = circumference - (progress / 100 * circumference);
-    progressCircle.style.strokeDashoffset = offset;
+    progressCircle.style.strokeDashoffset = `${offset}`;
 }
 
 // Create action button
@@ -1577,13 +1576,16 @@ function createDownloadButton(fileInfo) {
             
             // Start download
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                updateCircularProgress(progressCircle, circumference, progress);
+                requestAnimationFrame(() => {
+                    updateCircularProgress(progressCircle, circumference, progress);
+                });
             });
             
             // Show success checkmark
             container.innerHTML = "";
             const checkButton = createActionButton("check_circle", null);
-            checkButton.querySelector(".material-icons").classList.add("success-check");
+            const checkIcon = checkButton.querySelector(".material-icons");
+            checkIcon.classList.add("success-check");
             container.appendChild(checkButton);
             
             // Store the downloaded file
@@ -1592,24 +1594,27 @@ function createDownloadButton(fileInfo) {
             
             // Add downloaded class to list item
             const listItem = container.closest("li");
-            listItem.classList.add("downloaded");
+            if (listItem) {
+                listItem.classList.add("downloaded");
+            }
             
-            // Replace with open button after 2 seconds
+            // Replace with open button after animation
             setTimeout(() => {
                 container.innerHTML = "";
                 const openButton = createActionButton("open_in_new", () => {
                     window.open(fileUrl, "_blank");
                 }, "Open file");
+                openButton.classList.add("open-file");
                 container.appendChild(openButton);
-            }, 2000);
+            }, 1000);
             
         } catch (error) {
             console.error("Download error:", error);
-            showNotification(`Failed to download ${fileInfo.fileName}: ${error.message}`, "error");
+            showNotification(`Failed to download ${fileInfo.name}: ${error.message}`, "error");
             
             // Restore download button
             container.innerHTML = "";
-            container.appendChild(createActionButton("download", downloadButton.onclick));
+            container.appendChild(createActionButton("download", downloadButton.onclick, "Download file"));
         }
     }, "Download file");
     

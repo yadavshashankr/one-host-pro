@@ -556,6 +556,7 @@ input[type="file"] {
     stroke-width: 2.5;
     stroke-linecap: round;
     transform-origin: center;
+    transition: stroke-dashoffset 0.3s ease;
 }
 
 .circular-progress .progress-bg {
@@ -564,7 +565,25 @@ input[type="file"] {
 
 .circular-progress .progress-bar {
     stroke: var(--primary-color);
-    transition: stroke-dashoffset 0.3s ease;
+}
+
+/* Success animation */
+@keyframes checkmark {
+    0% { transform: scale(0); opacity: 0; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.success-check {
+    color: var(--success-color);
+    animation: checkmark 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Open file button */
+.file-action.open-file {
+    color: var(--primary-color);
+    opacity: 0;
+    animation: fadeIn 0.3s ease forwards;
 }
 
 .file-action {
@@ -593,25 +612,6 @@ input[type="file"] {
 
 .file-action .material-icons {
     font-size: 20px;
-}
-
-/* Success animation */
-@keyframes checkmark {
-    0% { transform: scale(0); opacity: 0; }
-    50% { transform: scale(1.2); opacity: 0.8; }
-    100% { transform: scale(1); opacity: 1; }
-}
-
-.success-check {
-    color: var(--success-color);
-    animation: checkmark 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-/* Open file button */
-.file-action.open-file {
-    color: var(--primary-color);
-    opacity: 0;
-    animation: fadeIn 0.3s ease forwards;
 }
 
 @keyframes fadeIn {

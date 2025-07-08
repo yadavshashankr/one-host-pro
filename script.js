@@ -1231,8 +1231,10 @@ function createCircularProgress() {
     progressCircle.setAttribute("cy", "12");
     progressCircle.setAttribute("r", radius.toString());
     progressCircle.classList.add("progress-bar");
-    progressCircle.style.strokeDasharray = `${circumference}`;
-    progressCircle.style.strokeDashoffset = `${circumference}`;
+    
+    // Set initial progress state
+    progressCircle.style.strokeDasharray = circumference;
+    progressCircle.style.strokeDashoffset = circumference;
     
     svg.appendChild(circle);
     svg.appendChild(progressCircle);
@@ -1246,11 +1248,8 @@ function createCircularProgress() {
 
 // Update circular progress
 function updateCircularProgress(progressCircle, circumference, progress) {
-    const percent = Math.min(Math.max(progress, 0), 100);
-    const offset = circumference - (percent / 100 * circumference);
-    requestAnimationFrame(() => {
-        progressCircle.style.strokeDashoffset = `${offset}`;
-    });
+    const offset = circumference - (progress / 100 * circumference);
+    progressCircle.style.strokeDashoffset = offset;
 }
 
 // Create action button
@@ -1278,7 +1277,9 @@ function createDownloadButton(fileInfo) {
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                updateCircularProgress(progressCircle, circumference, progress);
+                // Ensure progress is a number between 0 and 100
+                const normalizedProgress = Math.min(Math.max(progress, 0), 100);
+                updateCircularProgress(progressCircle, circumference, normalizedProgress);
             });
             
             // Store the downloaded file

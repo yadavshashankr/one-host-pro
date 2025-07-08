@@ -1,5 +1,3 @@
-# WebRTC File Sharing
-
 <p align="center">
   <img src="assets/logo.svg" alt="WebRTC File Sharing Logo" width="400">
 </p>

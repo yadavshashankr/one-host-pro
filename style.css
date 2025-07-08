@@ -535,7 +535,7 @@ input[type="file"] {
     margin-left: auto;
 }
 
-.progress-wrapper {
+.circular-progress {
     position: relative;
     width: 24px;
     height: 24px;
@@ -544,13 +544,28 @@ input[type="file"] {
     justify-content: center;
 }
 
-.circular-progress {
-    position: absolute;
+.circular-progress svg {
     width: 100%;
     height: 100%;
-    border-radius: 50%;
-    background: conic-gradient(#2196F3 var(--progress, 0%), rgba(33, 150, 243, 0.2) var(--progress, 0%));
     transform: rotate(-90deg);
+}
+
+.circular-progress circle {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transform-origin: center;
+    transform: rotate(-90deg);
+    transition: stroke-dashoffset 0.1s linear;
+}
+
+.circular-progress .progress-bg {
+    stroke: rgba(33, 150, 243, 0.2);
+}
+
+.circular-progress .progress-bar {
+    stroke: #2196F3;
+    transition: stroke-dashoffset 0.1s linear;
 }
 
 /* Success animation */
@@ -572,17 +587,12 @@ input[type="file"] {
     animation: fadeIn 0.3s ease forwards;
 }
 
-@keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.9); }
-    to { opacity: 1; transform: scale(1); }
-}
-
 .file-action {
     background: none;
     border: none;
     padding: 8px;
     cursor: pointer;
-    color: #2196F3;
+    color: var(--primary-color);
     border-radius: 50%;
     transition: all 0.3s ease;
     display: flex;
@@ -594,6 +604,20 @@ input[type="file"] {
 
 .file-action:hover {
     background-color: rgba(33, 150, 243, 0.1);
+    transform: scale(1.1);
+}
+
+.file-action:active {
+    transform: scale(0.95);
+}
+
+.file-action .material-icons {
+    font-size: 20px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
 }
 
 /* Mobile responsive adjustments */

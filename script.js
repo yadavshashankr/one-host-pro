@@ -1210,15 +1210,55 @@ function updateConnectionStatus(status, message) {
 
 // Create circular progress indicator
 function createCircularProgress() {
-    const progressContainer = document.createElement("div");
-    progressContainer.classList.add("progress-wrapper");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const progressCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     
-    const progressCircle = document.createElement("div");
-    progressCircle.classList.add("circular-progress");
-    progressCircle.style.setProperty("--progress", "0%");
+    svg.setAttribute("viewBox", "0 0 24 24");
     
-    progressContainer.appendChild(progressCircle);
-    return { container: progressContainer, progressCircle };
+    // Set common circle attributes
+    const radius = 8;
+    const circumference = 2 * Math.PI * radius;
+    
+    // Background circle
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", radius.toString());
+    circle.classList.add("progress-bg");
+    
+    // Progress circle
+    progressCircle.setAttribute("cx", "12");
+    progressCircle.setAttribute("cy", "12");
+    progressCircle.setAttribute("r", radius.toString());
+    progressCircle.classList.add("progress-bar");
+    
+    // Initialize progress circle with full circumference
+    progressCircle.style.strokeDasharray = `${circumference}`;
+    progressCircle.style.strokeDashoffset = `${circumference}`;
+    
+    svg.appendChild(circle);
+    svg.appendChild(progressCircle);
+    
+    const container = document.createElement("div");
+    container.classList.add("circular-progress");
+    container.appendChild(svg);
+    
+    return { container, progressCircle, circumference };
+}
+
+// Update circular progress
+function updateCircularProgress(progressCircle, circumference, progress) {
+    // Ensure progress is between 0 and 100
+    const normalizedProgress = Math.min(Math.max(progress, 0), 100);
+    
+    // Calculate the offset
+    const offset = circumference - (normalizedProgress / 100 * circumference);
+    
+    // Update the progress circle
+    requestAnimationFrame(() => {
+        progressCircle.style.strokeDasharray = `${circumference}`;
+        progressCircle.style.strokeDashoffset = `${offset}`;
+    });
 }
 
 // Create download button with progress
@@ -1229,19 +1269,25 @@ function createDownloadButton(fileInfo) {
     // Create initial download button
     const downloadButton = createActionButton("download", async () => {
         try {
-            // Create progress container first
-            const { container: progressContainer, progressCircle } = createCircularProgress();
-            
-            // Replace download button with progress container
+            // Replace download button with progress indicator
             container.innerHTML = "";
+            const { container: progressContainer, progressCircle, circumference } = createCircularProgress();
             container.appendChild(progressContainer);
+            
+            let lastProgress = 0;
+            const updateThreshold = 2; // Only update if progress changed by 2%
             
             // Start download with progress updates
             const blob = await requestAndDownloadBlob(fileInfo, (progress) => {
-                console.log('Download progress:', progress);
-                // Update progress using CSS custom property
-                progressCircle.style.setProperty("--progress", `${progress}%`);
+                // Only update if progress has changed significantly
+                if (Math.abs(progress - lastProgress) >= updateThreshold) {
+                    updateCircularProgress(progressCircle, circumference, progress);
+                    lastProgress = progress;
+                }
             });
+            
+            // Ensure final progress is shown
+            updateCircularProgress(progressCircle, circumference, 100);
             
             // Store the downloaded file
             const fileUrl = URL.createObjectURL(blob);

@@ -1,8 +1,8 @@
 // Constants
-const CHUNK_SIZE = 16384; // 16KB chunks
+const CHUNK_SIZE = 1024 * 1024 * 2; // 2MB chunks for better performance
 const DB_NAME = 'fileTransferDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'files';
+const DB_VERSION = 2; // Updated version for new stores
+const STORE_NAME = 'recentPeers'; // Store for recent peers
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 60000; // 60 seconds
 
@@ -21,7 +21,8 @@ const MESSAGE_TYPES = {
     DISCONNECT_NOTIFICATION: 'disconnect-notification',
     SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
     SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
-    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
+    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start',
+    BLOB_DATA: 'blob-data'
 };
 
 // DOM Elements
@@ -160,36 +161,112 @@ function updateRecentPeersList() {
 
 // Check WebRTC Support
 function checkBrowserSupport() {
+    const missingFeatures = [];
+
+    // Check WebRTC support
     if (!window.RTCPeerConnection || !navigator.mediaDevices) {
+        missingFeatures.push('WebRTC');
+    }
+
+    // Check IndexedDB support
+    if (!window.indexedDB) {
+        missingFeatures.push('IndexedDB');
+    }
+
+    // Check Blob support
+    if (!window.Blob || !window.File || !window.FileReader) {
+        missingFeatures.push('File API');
+    }
+
+    // Check Promise support
+    if (!window.Promise) {
+        missingFeatures.push('Promises');
+    }
+
+    // Check async/await support
+    try {
+        eval('(async () => {})()');
+    } catch (e) {
+        missingFeatures.push('Async/Await');
+    }
+
+    // Check ArrayBuffer support
+    if (!window.ArrayBuffer) {
+        missingFeatures.push('ArrayBuffer');
+    }
+
+    // Check FileSystem API support
+    if (!window.showDirectoryPicker && !window.webkitRequestFileSystem) {
+        console.log('FileSystem API not available, will use fallback storage');
+    }
+
+    // Check Web Workers support
+    if (!window.Worker) {
+        console.log('Web Workers not available, some features may be limited');
+    }
+
+    if (missingFeatures.length > 0) {
         elements.browserSupport.classList.remove('hidden');
+        elements.browserSupport.textContent = `Your browser is missing required features: ${missingFeatures.join(', ')}`;
+        showNotification('Your browser may not support all features', 'warning');
         return false;
     }
+
+    elements.browserSupport.classList.add('hidden');
     return true;
 }
 
 // Initialize IndexedDB
 async function initIndexedDB() {
-    try {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        
-        request.onerror = (event) => {
-            showNotification('IndexedDB initialization failed', 'error');
-        };
+    return new Promise((resolve, reject) => {
+        try {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            
+            request.onerror = (event) => {
+                showNotification('IndexedDB initialization failed', 'error');
+                reject(new Error('IndexedDB initialization failed'));
+            };
 
-        request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-            }
-        };
+            request.onupgradeneeded = (event) => {
+                try {
+                    const db = event.target.result;
+                    
+                    // Create stores if they don't exist
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE)) {
+                        db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
+                    }
+                    if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_META_STORE)) {
+                        db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_META_STORE);
+                    }
+                } catch (error) {
+                    console.error('Error during database upgrade:', error);
+                    reject(error);
+                }
+            };
 
-        request.onsuccess = (event) => {
-            db = event.target.result;
-        };
-    } catch (error) {
-        console.error('IndexedDB Error:', error);
-        showNotification('Storage initialization failed', 'error');
-    }
+            request.onsuccess = (event) => {
+                try {
+                    db = event.target.result;
+                    resolve(db);
+                } catch (error) {
+                    console.error('Error during database success:', error);
+                    reject(error);
+                }
+            };
+
+            request.onblocked = (event) => {
+                console.error('Database initialization blocked:', event);
+                reject(new Error('Database initialization blocked'));
+            };
+        } catch (error) {
+            console.error('IndexedDB Error:', error);
+            showNotification('Storage initialization failed', 'error');
+            reject(error);
+        }
+    });
 }
 
 // Generate QR Code
@@ -264,38 +341,31 @@ async function shareId() {
 
 // Setup peer event handlers
 function setupPeerHandlers() {
-    if (!peer) {
-        console.error('Cannot setup handlers: peer is null');
-        return;
-    }
-
+    console.log('Setting up peer event handlers...');
+    
     peer.on('open', (id) => {
-        console.log('Peer opened with ID:', id);
+        console.log('Peer connection opened with ID:', id);
         elements.peerId.textContent = id;
         updateConnectionStatus('', 'Ready to connect');
+        isConnectionReady = true;
         generateQRCode(id);
+        
+        // Initialize share button after we have a peer ID
+        console.log('Initializing share button');
         initShareButton();
-        updateEditButtonState();
-    });
-
-    peer.on('connection', (conn) => {
-        console.log('Incoming connection from:', conn.peer);
-        connections.set(conn.peer, conn);
-        updateConnectionStatus('connecting', 'Incoming connection...');
-        setupConnectionHandlers(conn);
+        
+        // Show the file transfer section
+        console.log('Showing file transfer section');
+        elements.fileTransferSection.classList.remove('hidden');
     });
 
     peer.on('error', (error) => {
-        console.error('PeerJS Error:', error);
-        let errorMessage = 'Connection error';
+        console.error('Peer Error:', error);
+        console.error('Error type:', error.type);
+        let errorMessage = 'Connection error occurred';
         
-        // Handle specific error types
-        if (error.type === 'peer-unavailable') {
-            errorMessage = 'Peer is not available or does not exist';
-        } else if (error.type === 'network') {
+        if (error.type === 'network') {
             errorMessage = 'Network connection error';
-        } else if (error.type === 'disconnected') {
-            errorMessage = 'Disconnected from server';
         } else if (error.type === 'server-error') {
             errorMessage = 'Server error occurred';
         } else if (error.type === 'unavailable-id') {
@@ -308,25 +378,31 @@ function setupPeerHandlers() {
             errorMessage = 'SSL is required for this connection';
         }
         
+        console.error('Error message:', errorMessage);
         updateConnectionStatus('', errorMessage);
         showNotification(errorMessage, 'error');
 
         // If this was during a custom ID setup, revert to auto-generated ID
         if (elements.peerIdEdit && !elements.peerIdEdit.classList.contains('hidden')) {
+            console.log('Reverting to auto-generated ID');
             cancelEditingPeerId();
-            initPeerJS(); // Reinitialize with auto-generated ID
+            setTimeout(() => {
+                console.log('Reinitializing PeerJS');
+                initPeerJS();
+            }, 1000); // Reinitialize with delay
         }
     });
 
     peer.on('disconnected', () => {
-        console.log('Peer disconnected');
+        console.log('Peer disconnected from server');
         updateConnectionStatus('', 'Disconnected');
         isConnectionReady = false;
         
         // Try to reconnect
+        console.log('Attempting to reconnect in 3 seconds...');
         setTimeout(() => {
             if (peer && !peer.destroyed) {
-                console.log('Attempting to reconnect...');
+                console.log('Attempting to reconnect to server...');
                 peer.reconnect();
             }
         }, 3000);
@@ -336,46 +412,89 @@ function setupPeerHandlers() {
         console.log('Peer connection closed');
         updateConnectionStatus('', 'Connection closed');
         isConnectionReady = false;
+        elements.fileTransferSection.classList.add('hidden');
     });
+
+    // Add connection handler
+    peer.on('connection', (conn) => {
+        console.log('Incoming connection from:', conn.peer);
+        connections.set(conn.peer, conn);
+        setupConnectionHandlers(conn);
+    });
+    
+    console.log('Peer event handlers set up successfully');
 }
 
 // Initialize PeerJS
 function initPeerJS() {
-    try {
-        console.log('Initializing PeerJS...');
-        
-        // Destroy existing peer if any
-        if (peer) {
-            console.log('Destroying existing peer connection');
-            peer.destroy();
-            peer = null;
-        }
-
-        // Clear existing connections
-        connections.clear();
-
-        // Create new peer with auto-generated ID
-        peer = new Peer({
-            debug: 2,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
-                ]
+    return new Promise((resolve, reject) => {
+        try {
+            console.log('Initializing PeerJS...');
+            
+            // Destroy existing peer if any
+            if (peer) {
+                console.log('Destroying existing peer connection');
+                peer.destroy();
+                peer = null;
             }
-        });
 
-        setupPeerHandlers();
+            // Clear existing connections
+            console.log('Clearing existing connections');
+            connections.clear();
 
-    } catch (error) {
-        console.error('PeerJS Initialization Error:', error);
-        updateConnectionStatus('', 'Initialization failed');
-        showNotification('Failed to initialize peer connection', 'error');
-    }
+            // Create new peer with auto-generated ID
+            console.log('Creating new peer with auto-generated ID');
+            peer = new Peer({
+                debug: 2,
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ]
+                }
+            });
+
+            // Add one-time open handler for initialization
+            peer.once('open', () => {
+                console.log('PeerJS initialized successfully with ID:', peer.id);
+                resolve();
+            });
+
+            // Add error handler for initialization
+            peer.once('error', (error) => {
+                console.error('PeerJS initialization error:', error);
+                if (error.type) {
+                    console.error('Error type:', error.type);
+                }
+                reject(error);
+            });
+
+            // Setup regular event handlers
+            console.log('Setting up peer event handlers');
+            setupPeerHandlers();
+
+            // Add timeout for initialization
+            console.log('Setting initialization timeout');
+            setTimeout(() => {
+                if (!peer.id) {
+                    const error = new Error('PeerJS initialization timeout');
+                    console.error(error);
+                    peer.destroy();
+                    reject(error);
+                }
+            }, 10000); // 10 second timeout
+
+        } catch (error) {
+            console.error('PeerJS Initialization Error:', error);
+            reject(error);
+        }
+    });
 }
 
 // Setup connection event handlers
 function setupConnectionHandlers(conn) {
+    console.log('Setting up connection handlers for peer:', conn.peer);
+    
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
         updateConnectionStatus('connected', `Connected to ${conn.peer}`);
@@ -385,26 +504,83 @@ function setupConnectionHandlers(conn) {
         
         // Clear any existing timeout for this connection
         if (connectionTimeouts.has(conn.peer)) {
+            console.log('Clearing existing timeout for peer:', conn.peer);
             clearTimeout(connectionTimeouts.get(conn.peer));
             connectionTimeouts.delete(conn.peer);
         }
         
         // Send connection notification
+        console.log('Sending connection notification to:', conn.peer);
         conn.send({
             type: 'connection-notification',
             peerId: peer.id
         });
     });
 
+    conn.on('error', (error) => {
+        console.error('Connection error with peer:', conn.peer, error);
+        showNotification(`Connection error with peer ${conn.peer}`, 'error');
+        
+        // Remove the connection from our map
+        console.log('Removing connection for peer:', conn.peer);
+        connections.delete(conn.peer);
+        
+        // Update status
+        const newStatus = connections.size > 0 ? 'connected' : '';
+        const newMessage = connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Connection error';
+        console.log('Updating connection status:', newStatus, newMessage);
+        updateConnectionStatus(newStatus, newMessage);
+        
+        // Hide file transfer section if no connections
+        if (connections.size === 0) {
+            console.log('No active connections, hiding file transfer section');
+            elements.fileTransferSection.classList.add('hidden');
+        }
+        
+        // Try to reconnect
+        console.log('Scheduling reconnection attempt to:', conn.peer);
+        setTimeout(() => {
+            if (!connections.has(conn.peer) && peer && !peer.destroyed) {
+                console.log('Attempting to reconnect to:', conn.peer);
+                const newConn = peer.connect(conn.peer);
+                connections.set(conn.peer, newConn);
+                setupConnectionHandlers(newConn);
+            }
+        }, 3000);
+    });
+
+    conn.on('close', () => {
+        console.log('Connection closed with:', conn.peer);
+        
+        // Remove the connection from our map
+        console.log('Removing connection for peer:', conn.peer);
+        connections.delete(conn.peer);
+        
+        // Update status
+        const newStatus = connections.size > 0 ? 'connected' : '';
+        const newMessage = connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected';
+        console.log('Updating connection status:', newStatus, newMessage);
+        updateConnectionStatus(newStatus, newMessage);
+        
+        // Hide file transfer section if no connections
+        if (connections.size === 0) {
+            console.log('No active connections, hiding file transfer section');
+            elements.fileTransferSection.classList.add('hidden');
+        }
+        
+        showNotification(`Disconnected from peer ${conn.peer}`, 'warning');
+    });
+
     conn.on('data', async (data) => {
         try {
-            console.log('Received data:', data);
+            console.log('Received data from peer:', conn.peer, 'Type:', data.type);
             
             switch (data.type) {
                 case 'connection-notification':
                     console.log('Received connection notification from:', data.peerId);
                     updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
                     // When we receive a connection notification, send our file history
+                    console.log('Sending file transfer history to:', conn.peer);
                     sendFileTransferHistory(conn);
                     break;
 
@@ -431,98 +607,36 @@ function setupConnectionHandlers(conn) {
                     showNotification(`Peer ${conn.peer} disconnected`, 'warning');
                     break;
 
-                case 'file-start':
-                    // Existing file-start handling code
+                case 'file-info':
+                    console.log('Received file info from peer:', conn.peer);
+                    await handleFileHeader(data);
                     break;
 
                 case 'file-chunk':
-                    // Existing file-chunk handling code
+                    console.log('Received file chunk from peer:', conn.peer, 'Chunk:', data.chunkIndex);
+                    await handleFileChunk(data);
                     break;
 
-                case 'file-end':
-                    const { fileName, fileType, fileSize } = data;
-                    const file = new File([receivedChunks[data.fileId]], fileName, { type: fileType });
-                    receivedChunks[data.fileId] = null; // Clear chunks from memory
-                    
-                    // Add to file transfer history
-                    if (!fileTransferHistory.has(conn.peer)) {
-                        fileTransferHistory.set(conn.peer, []);
-                    }
-                    
-                    const transfer = {
-                        fileName,
-                        fileType,
-                        fileSize,
-                        timestamp: new Date().toISOString(),
-                        direction: 'received'
-                    };
-                    
-                    fileTransferHistory.get(conn.peer).push(transfer);
-                    
-                    // Create URL for the file
-                    const url = URL.createObjectURL(file);
-                    transfer.url = url;
-                    
-                    displayReceivedFile(file, conn.peer);
-                    updateFileTransferUI();
-                    
-                    // Broadcast the updated history to all connected peers
-                    broadcastFileHistory();
+                case 'file-complete':
+                    console.log('Received file complete from peer:', conn.peer);
+                    await handleFileComplete(data);
                     break;
 
-                case 'transfer-history':
-                    console.log('Received file transfer history from:', conn.peer);
-                    mergeFileHistory(data.history);
-                    updateFileTransferUI();
+                case 'blob-request':
+                    console.log('Received blob request from peer:', conn.peer);
+                    await handleBlobRequest(data, conn);
                     break;
 
                 default:
-                    console.error('Unknown data type:', data.type);
+                    console.warn('Received unknown data type:', data.type, 'from peer:', conn.peer);
             }
         } catch (error) {
-            console.error('Data handling error:', error);
-            showNotification('Error processing received data', 'error');
+            console.error('Error handling data from peer:', conn.peer, error);
+            showNotification(`Error handling data: ${error.message}`, 'error');
         }
     });
-
-    conn.on('close', () => {
-        console.log('Connection closed with:', conn.peer);
-        connections.delete(conn.peer);
-        
-        // Clear timeout for this connection
-        if (connectionTimeouts.has(conn.peer)) {
-            clearTimeout(connectionTimeouts.get(conn.peer));
-            connectionTimeouts.delete(conn.peer);
-        }
-        
-        updateConnectionStatus(
-            connections.size > 0 ? 'connected' : '',
-            connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected'
-        );
-        
-        if (connections.size === 0) {
-            showNotification('All peers disconnected', 'error');
-        } else {
-            showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-        }
-    });
-
-    conn.on('error', (error) => {
-        console.error('Connection Error:', error);
-        updateConnectionStatus('', 'Connection error');
-        showNotification('Connection error occurred', 'error');
-        
-        // Set a timeout to attempt reconnection
-        if (!connectionTimeouts.has(conn.peer)) {
-            const timeout = setTimeout(() => {
-                console.log(`Attempting to reconnect to ${conn.peer} after error...`);
-                reconnectToPeer(conn.peer);
-                connectionTimeouts.delete(conn.peer);
-            }, 5000); // Wait 5 seconds before attempting reconnection
-            
-            connectionTimeouts.set(conn.peer, timeout);
-        }
-    });
+    
+    console.log('Connection handlers set up successfully for peer:', conn.peer);
 }
 
 // Helper function to generate a unique file ID
@@ -532,102 +646,300 @@ function generateFileId(file) {
 
 // Handle file header
 async function handleFileHeader(data) {
-    console.log('Received file header:', data);
-    fileChunks[data.fileId] = {
-        chunks: [],
-        fileName: data.fileName,
-        fileType: data.fileType,
-        fileSize: data.fileSize,
-        receivedSize: 0,
-        originalSender: data.originalSender
-    };
-    elements.transferProgress.classList.remove('hidden');
-    updateProgress(0);
-    updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
+    try {
+        console.log('Processing file header:', data);
+        const { fileId, fileName, fileType, fileSize, chunkSize } = data;
+        
+        // Validate required fields
+        if (!fileId || !fileName || !fileType || !fileSize) {
+            const error = new Error('Missing required file information');
+            console.error(error);
+            throw error;
+        }
+
+        // Validate file size
+        if (fileSize <= 0) {
+            const error = new Error('Invalid file size');
+            console.error(error);
+            throw error;
+        }
+
+        // Check if we already have a file with this ID
+        if (fileChunks[fileId]) {
+            const error = new Error('File transfer already in progress');
+            console.error(error);
+            throw error;
+        }
+
+        console.log('File validation successful:', {
+            fileName,
+            fileType,
+            fileSize,
+            chunkSize
+        });
+
+        // Initialize file data structure
+        console.log('Initializing file data structure...');
+        if (fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Large file detected, using storage manager...');
+            fileChunks[fileId] = {
+                fileName: fileName,
+                fileType: fileType,
+                size: fileSize,
+                receivedSize: 0,
+                receivedChunks: new Set(),
+                peerId: data.peerId
+            };
+            console.log('File data structure initialized for storage manager');
+        } else {
+            console.log('Small file, using memory storage...');
+            fileChunks[fileId] = {
+                fileName: fileName,
+                fileType: fileType,
+                size: fileSize,
+                receivedSize: 0,
+                chunks: [],
+                peerId: data.peerId
+            };
+            console.log('File data structure initialized for memory storage');
+        }
+
+        // Update UI
+        console.log('Updating UI...');
+        updateTransferProgress(0);
+        elements.transferProgress.classList.remove('hidden');
+        updateTransferInfo(`Receiving: ${fileName}`);
+        console.log('UI updated');
+
+        console.log('File header processing completed successfully:', {
+            fileId,
+            fileName,
+            storageType: fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE ? 'storage manager' : 'memory'
+        });
+
+    } catch (error) {
+        console.error('Error handling file header:', error);
+        showNotification(`Error processing file header: ${error.message}`, 'error');
+        elements.transferProgress.classList.add('hidden');
+        updateTransferInfo('');
+        throw error;
+    }
 }
 
 // Handle file chunk
 async function handleFileChunk(data) {
-    const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    try {
+        console.log('Processing file chunk:', {
+            fileId: data.fileId,
+            chunkIndex: data.chunkIndex,
+            chunkSize: data.data.byteLength
+        });
 
-    fileData.chunks.push(data.data);
-    fileData.receivedSize += data.data.byteLength;
-    
-    // Update progress more smoothly (update every 1% change)
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress);
-        fileData.lastProgressUpdate = currentProgress;
+        const fileData = fileChunks[data.fileId];
+        if (!fileData) {
+            console.error('No file data found for file ID:', data.fileId);
+            return;
+        }
+        console.log('File data found:', {
+            fileName: fileData.fileName,
+            totalSize: fileData.size,
+            receivedSize: fileData.receivedSize
+        });
+
+        // Store the chunk
+        if (fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Large file detected, storing chunk in storage manager...');
+            try {
+                await storageManager.storeFileChunk(data.fileId, data.chunkIndex, data.data);
+                fileData.receivedChunks.add(data.chunkIndex);
+                fileData.receivedSize += data.data.byteLength;
+                console.log('Chunk stored successfully:', {
+                    chunkIndex: data.chunkIndex,
+                    chunkSize: data.data.byteLength,
+                    totalReceived: fileData.receivedSize
+                });
+            } catch (error) {
+                console.error('Error storing chunk:', error);
+                throw error;
+            }
+        } else {
+            console.log('Small file, storing chunk in memory...');
+            fileData.chunks.push(data.data);
+            fileData.receivedSize += data.data.byteLength;
+            console.log('Chunk stored in memory:', {
+                chunkIndex: fileData.chunks.length - 1,
+                chunkSize: data.data.byteLength,
+                totalReceived: fileData.receivedSize
+            });
+        }
+
+        // Calculate and update progress
+        const progress = (fileData.receivedSize / fileData.size) * 100;
+        console.log('File transfer progress:', {
+            received: fileData.receivedSize,
+            total: fileData.size,
+            progress: progress.toFixed(2) + '%',
+            chunksReceived: fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE ? 
+                fileData.receivedChunks.size : 
+                fileData.chunks.length
+        });
+
+        // Update progress bar (update every 1% change)
+        if (!fileData.lastProgressUpdate || progress - fileData.lastProgressUpdate >= 1) {
+            console.log('Updating progress bar:', progress.toFixed(2) + '%');
+            updateTransferProgress(progress);
+            fileData.lastProgressUpdate = progress;
+        }
+
+        // Update transfer info
+        const receivedMB = (fileData.receivedSize / 1024 / 1024).toFixed(2);
+        const totalMB = (fileData.size / 1024 / 1024).toFixed(2);
+        const transferInfo = `Receiving: ${fileData.fileName} (${receivedMB}MB / ${totalMB}MB)`;
+        console.log('Updating transfer info:', transferInfo);
+        updateTransferInfo(transferInfo);
+
+    } catch (error) {
+        console.error('Error handling file chunk:', error);
+        showNotification(`Error processing file chunk: ${error.message}`, 'error');
+        throw error;
     }
 }
 
-// Handle file completion
+// Update handleFileComplete to handle large files
 async function handleFileComplete(data) {
-    const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
-
     try {
-        // Combine chunks into blob if this is a blob transfer
-        if (fileData.chunks.length > 0) {
-            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-            
-            // Verify file size
-            if (blob.size !== fileData.fileSize) {
-                throw new Error('Received file size does not match expected size');
-            }
+        console.log('Processing file completion:', data);
+        const { fileId, fileName, fileType, fileSize, totalChunks } = data;
+        const fileInfo = fileChunks[fileId];
+        
+        if (!fileInfo) {
+            const error = new Error('No file info found');
+            console.error(error);
+            throw error;
+        }
 
-            // Create download URL and trigger download
-            downloadBlob(blob, fileData.fileName, data.fileId);
-            showNotification(`Downloaded ${fileData.fileName}`, 'success');
+        console.log('File info:', {
+            fileName,
+            fileType,
+            fileSize,
+            totalChunks,
+            receivedSize: fileInfo.receivedSize
+        });
 
-            // Update UI to show completed state
-            const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
-            if (listItem) {
-                listItem.classList.add('download-completed');
-                const downloadButton = listItem.querySelector('.icon-button');
-                if (downloadButton) {
-                    downloadButton.classList.add('download-completed');
-                    downloadButton.innerHTML = '<span class="material-icons">open_in_new</span>';
-                    downloadButton.title = 'Open file';
-                    
-                    // Store the blob URL for opening the file
-                    const blobUrl = URL.createObjectURL(blob);
-                    downloadButton.onclick = () => {
-                        window.open(blobUrl, '_blank');
-                    };
+        // Verify we have all chunks
+        if (fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Large file detected, verifying chunks from storage...');
+            const missingChunks = [];
+            for (let i = 0; i < totalChunks; i++) {
+                if (!fileInfo.receivedChunks.has(i)) {
+                    console.warn('Missing chunk:', i);
+                    missingChunks.push(i);
                 }
             }
-        }
 
-        // Create file info object
-        const fileInfo = {
-            name: fileData.fileName,
-            type: fileData.fileType,
-            size: fileData.fileSize,
-            id: data.fileId,
-            sharedBy: fileData.originalSender
-        };
-
-        // Add to history if this is a new file info
-        if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-            addFileToHistory(fileInfo, 'received');
-
-            // If this is the host peer, forward the file info to other connected peers
-            if (connections.size > 1) {
-                console.log('Forwarding file info to other peers as host');
-                await forwardFileInfoToPeers(fileInfo, data.fileId);
+            if (missingChunks.length > 0) {
+                const error = new Error(`Missing chunks: ${missingChunks.join(', ')}`);
+                console.error(error);
+                throw error;
             }
+            console.log('All chunks verified successfully');
+
+            // Combine chunks from storage
+            console.log('Combining chunks from storage...');
+            const chunks = [];
+            for (let i = 0; i < totalChunks; i++) {
+                console.log('Reading chunk:', i);
+                const chunk = await storageManager.getFileChunk(fileId, i);
+                chunks.push(chunk);
+            }
+            console.log('All chunks read from storage');
+
+            // Create blob
+            console.log('Creating file blob...');
+            const blob = new Blob(chunks, { type: fileType });
+            console.log('File blob created:', {
+                size: blob.size,
+                type: blob.type
+            });
+
+            // Clean up storage
+            console.log('Cleaning up storage...');
+            await storageManager.cleanup(fileId);
+            console.log('Storage cleanup completed');
+
+            // Download file
+            console.log('Initiating file download...');
+            downloadBlob(blob, fileName, fileId);
+            console.log('File download initiated');
+
+        } else {
+            console.log('Small file, combining chunks from memory...');
+            // Verify we have all chunks
+            if (fileInfo.chunks.length !== totalChunks) {
+                const error = new Error(`Missing chunks. Expected: ${totalChunks}, Got: ${fileInfo.chunks.length}`);
+                console.error(error);
+                throw error;
+            }
+            console.log('All chunks verified successfully');
+
+            // Create blob
+            console.log('Creating file blob...');
+            const blob = new Blob(fileInfo.chunks, { type: fileType });
+            console.log('File blob created:', {
+                size: blob.size,
+                type: blob.type
+            });
+
+            // Download file
+            console.log('Initiating file download...');
+            downloadBlob(blob, fileName, fileId);
+            console.log('File download initiated');
         }
+
+        // Update UI
+        console.log('Updating UI...');
+        updateTransferProgress(100);
+        setTimeout(() => {
+            elements.transferProgress.classList.add('hidden');
+            updateTransferInfo('');
+        }, 1000);
+
+        // Add to transfer history
+        console.log('Updating transfer history...');
+        const transfer = {
+            fileName: fileName,
+            fileType: fileType,
+            fileSize: fileSize,
+            timestamp: new Date().toISOString(),
+            direction: 'received',
+            peerId: fileInfo.peerId
+        };
+        
+        if (!fileTransferHistory.has(fileInfo.peerId)) {
+            fileTransferHistory.set(fileInfo.peerId, []);
+        }
+        fileTransferHistory.get(fileInfo.peerId).push(transfer);
+        updateFileTransferUI();
+        broadcastFileHistory();
+        console.log('Transfer history updated');
+
+        // Clean up memory
+        console.log('Cleaning up memory...');
+        delete fileChunks[fileId];
+        console.log('Memory cleanup completed');
+
+        console.log('File completion processing finished successfully:', {
+            fileName,
+            fileSize,
+            totalChunks
+        });
 
     } catch (error) {
         console.error('Error handling file completion:', error);
-        showNotification('Error processing file: ' + error.message, 'error');
-    } finally {
-        delete fileChunks[data.fileId];
+        showNotification(`Error completing file transfer: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
-        updateProgress(0);
         updateTransferInfo('');
+        throw error;
     }
 }
 
@@ -688,103 +1000,108 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
 // Handle blob request
 async function handleBlobRequest(data, conn) {
     const { fileId, forwardTo } = data;
-    console.log('Received blob request for file:', fileId);
+    console.log('Received blob request:', {
+        fileId,
+        forwardTo,
+        fromPeer: conn.peer
+    });
 
     // Check if we have the blob
     const blob = sentFileBlobs.get(fileId);
     if (!blob) {
         console.error('Blob not found for file:', fileId);
         conn.send({
-            type: 'blob-error',
+            type: MESSAGE_TYPES.BLOB_ERROR,
             fileId: fileId,
             error: 'File not available'
         });
         return;
     }
+    console.log('Blob found:', {
+        size: blob.size,
+        type: blob.type
+    });
 
-    try {
-        // Convert blob to array buffer
-        const buffer = await blob.arrayBuffer();
-        let offset = 0;
-        let lastProgressUpdate = 0;
-
-        // Send file header
-        conn.send({
-            type: 'file-header',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            originalSender: peer.id,
-            timestamp: Date.now()
-        });
-
-        // Send chunks
-        while (offset < blob.size) {
-            if (!conn.open) {
-                throw new Error('Connection lost during transfer');
-            }
-
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+    // If this is a forwarded request, send to original requester
+    if (forwardTo) {
+        console.log('Forwarding blob to:', forwardTo);
+        const forwardConn = connections.get(forwardTo);
+        if (!forwardConn) {
+            console.error('No connection found for forward target:', forwardTo);
             conn.send({
-                type: 'file-chunk',
+                type: MESSAGE_TYPES.BLOB_ERROR,
                 fileId: fileId,
-                data: chunk,
-                offset: offset,
-                total: blob.size
+                error: 'Forward connection not found'
             });
-
-            offset += chunk.byteLength;
-
-            // Update progress
-            const currentProgress = (offset / blob.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
-                lastProgressUpdate = currentProgress;
-            }
+            return;
         }
 
-        // Send completion message
-        conn.send({
-            type: 'file-complete',
-            fileId: fileId,
-            fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
-            timestamp: Date.now()
-        });
-
-        console.log(`File sent successfully to peer ${conn.peer}`);
-    } catch (error) {
-        console.error(`Error sending file to peer:`, error);
-        conn.send({
-            type: 'blob-error',
-            fileId: fileId,
-            error: error.message
-        });
+        try {
+            console.log('Sending blob to forward target...');
+            forwardConn.send({
+                type: MESSAGE_TYPES.BLOB_DATA,
+                fileId: fileId,
+                blob: blob
+            });
+            console.log('Blob forwarded successfully');
+        } catch (error) {
+            console.error('Error forwarding blob:', error);
+            conn.send({
+                type: MESSAGE_TYPES.BLOB_ERROR,
+                fileId: fileId,
+                error: 'Forward failed: ' + error.message
+            });
+        }
+    } else {
+        // Send directly to requester
+        try {
+            console.log('Sending blob to requester...');
+            conn.send({
+                type: MESSAGE_TYPES.BLOB_DATA,
+                fileId: fileId,
+                blob: blob
+            });
+            console.log('Blob sent successfully');
+        } catch (error) {
+            console.error('Error sending blob:', error);
+            conn.send({
+                type: MESSAGE_TYPES.BLOB_ERROR,
+                fileId: fileId,
+                error: 'Send failed: ' + error.message
+            });
+        }
     }
 }
 
 // Function to request and download a blob
 async function requestAndDownloadBlob(fileInfo) {
     try {
+        console.log('Starting blob download request:', {
+            fileName: fileInfo.name,
+            fileId: fileInfo.id,
+            sharedBy: fileInfo.sharedBy
+        });
+
         // Always try to connect to original sender directly
         let conn = connections.get(fileInfo.sharedBy);
         
         if (!conn || !conn.open) {
-            // If no direct connection exists, establish one
             console.log('No direct connection to sender, establishing connection...');
             conn = peer.connect(fileInfo.sharedBy, {
                 reliable: true
             });
+            console.log('Connection initiated');
             
             // Wait for connection to open
+            console.log('Waiting for connection to open...');
             await new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
+                    console.error('Connection timeout');
                     reject(new Error('Connection timeout'));
                 }, 10000); // 10 second timeout
 
                 conn.on('open', () => {
+                    console.log('Connection opened successfully');
                     clearTimeout(timeout);
                     connections.set(fileInfo.sharedBy, conn);
                     setupConnectionHandlers(conn);
@@ -792,40 +1109,56 @@ async function requestAndDownloadBlob(fileInfo) {
                 });
 
                 conn.on('error', (err) => {
+                    console.error('Connection error:', err);
                     clearTimeout(timeout);
                     reject(err);
                 });
             });
+            console.log('Connection established successfully');
+        } else {
+            console.log('Using existing connection to sender');
         }
 
         // Now we should have a direct connection to the sender
+        console.log('Preparing UI for transfer...');
         elements.transferProgress.classList.remove('hidden');
         updateProgress(0);
         updateTransferInfo(`Requesting ${fileInfo.name} directly from sender...`);
+        console.log('UI prepared');
 
         // Request the file directly
+        console.log('Sending blob request...');
         conn.send({
             type: 'blob-request',
             fileId: fileInfo.id,
             fileName: fileInfo.name,
             directRequest: true
         });
+        console.log('Blob request sent');
 
     } catch (error) {
         console.error('Error requesting file:', error);
         showNotification(`Failed to download file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
         updateTransferInfo('');
+        throw error;
     }
 }
 
 // Handle forwarded blob request (host only)
 async function handleForwardedBlobRequest(data, fromConn) {
-    console.log('Handling forwarded blob request:', data);
+    console.log('Handling forwarded blob request:', {
+        fileId: data.fileId,
+        fileName: data.fileName,
+        originalSender: data.originalSender,
+        requesterId: data.requesterId,
+        fromPeer: fromConn.peer
+    });
     
     // Find connection to original sender
     const originalSenderConn = connections.get(data.originalSender);
     if (!originalSenderConn || !originalSenderConn.open) {
+        console.error('Original sender not connected:', data.originalSender);
         fromConn.send({
             type: 'blob-error',
             fileId: data.fileId,
@@ -833,14 +1166,26 @@ async function handleForwardedBlobRequest(data, fromConn) {
         });
         return;
     }
+    console.log('Found connection to original sender:', data.originalSender);
 
     // Request blob from original sender with forwarding info
-    originalSenderConn.send({
-        type: 'blob-request',
-        fileId: data.fileId,
-        fileName: data.fileName,
-        forwardTo: data.requesterId
-    });
+    console.log('Forwarding request to original sender...');
+    try {
+        originalSenderConn.send({
+            type: 'blob-request',
+            fileId: data.fileId,
+            fileName: data.fileName,
+            forwardTo: data.requesterId
+        });
+        console.log('Request forwarded successfully');
+    } catch (error) {
+        console.error('Error forwarding request:', error);
+        fromConn.send({
+            type: 'blob-error',
+            fileId: data.fileId,
+            error: 'Failed to forward request: ' + error.message
+        });
+    }
 }
 
 // Update transfer info display
@@ -1405,108 +1750,203 @@ function reconnectToPeer(peerId) {
 
 // Function to download a blob
 function downloadBlob(blob, fileName, fileId) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+        console.log('Starting file download:', {
+            fileName,
+            fileId,
+            blobSize: blob.size,
+            blobType: blob.type
+        });
 
-    // If fileId is provided, update the UI
-    if (fileId) {
-        const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
-        if (listItem) {
-            listItem.classList.add('download-completed');
-            const downloadButton = listItem.querySelector('.icon-button');
-            if (downloadButton) {
-                downloadButton.classList.add('download-completed');
-                downloadButton.innerHTML = '<span class="material-icons">open_in_new</span>';
-                downloadButton.title = 'Open file';
-                
-                // Store the blob URL for opening the file
-                const openUrl = URL.createObjectURL(blob);
-                downloadButton.onclick = () => {
-                    window.open(openUrl, '_blank');
-                };
-            }
-        }
+        // Create download URL
+        console.log('Creating download URL...');
+        const url = URL.createObjectURL(blob);
+        console.log('Download URL created:', url);
+
+        // Create download link
+        console.log('Creating download link...');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        console.log('Download link created');
+
+        // Trigger download
+        console.log('Triggering download...');
+        a.click();
+        console.log('Download triggered');
+
+        // Clean up
+        console.log('Cleaning up...');
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('Cleanup completed');
+
+        // Add to downloads list
+        console.log('Updating downloads list...');
+        const fileInfo = {
+            fileName: fileName,
+            fileId: fileId,
+            timestamp: new Date().toISOString(),
+            size: blob.size,
+            type: blob.type
+        };
+        addFileToHistory(fileInfo, 'downloads');
+        console.log('Downloads list updated');
+
+        console.log('File download process completed successfully:', {
+            fileName,
+            fileId
+        });
+    } catch (error) {
+        console.error('Error downloading file:', error);
+        showNotification(`Failed to download file: ${error.message}`, 'error');
+        throw error;
     }
-
-    // Cleanup the download URL
-    setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 // Function to handle simultaneous download request
 async function handleSimultaneousDownloadRequest(data, conn) {
-    console.log('Received simultaneous download request:', data);
-    const { fileId } = data;
+    console.log('Received simultaneous download request:', {
+        fileId: data.fileId,
+        fileName: data.fileName,
+        fromPeer: conn.peer
+    });
     
     // Check if we have the blob
-    const blob = sentFileBlobs.get(fileId);
+    const blob = sentFileBlobs.get(data.fileId);
     if (!blob) {
-        console.error('Blob not found for file:', fileId);
+        console.error('Blob not found for file:', data.fileId);
         conn.send({
             type: MESSAGE_TYPES.BLOB_ERROR,
-            fileId: fileId,
+            fileId: data.fileId,
             error: 'File not available'
         });
         return;
     }
+    console.log('Blob found:', {
+        size: blob.size,
+        type: blob.type
+    });
 
     // Send ready signal
-    conn.send({
-        type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY,
-        fileId: fileId,
-        fileSize: blob.size
-    });
+    console.log('Sending ready signal...');
+    try {
+        conn.send({
+            type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY,
+            fileId: data.fileId,
+            fileSize: blob.size
+        });
+        console.log('Ready signal sent successfully');
+    } catch (error) {
+        console.error('Error sending ready signal:', error);
+        conn.send({
+            type: MESSAGE_TYPES.BLOB_ERROR,
+            fileId: data.fileId,
+            error: 'Failed to send ready signal: ' + error.message
+        });
+    }
 }
 
 // Function to initiate simultaneous download
 async function initiateSimultaneousDownload(fileInfo) {
+    console.log('Initiating simultaneous download:', {
+        fileId: fileInfo.fileId,
+        fileName: fileInfo.fileName,
+        originalSender: fileInfo.originalSender
+    });
+
     const downloadingPeers = new Set();
     const readyPeers = new Set();
     let downloadStarted = false;
 
     // Function to start download for all ready peers
     const startDownloadForAll = () => {
-        if (downloadStarted) return;
+        if (downloadStarted) {
+            console.log('Download already started, skipping');
+            return;
+        }
         downloadStarted = true;
         
-        console.log('Starting simultaneous download for all ready peers');
+        console.log('Starting simultaneous download for all ready peers:', {
+            readyPeers: Array.from(readyPeers),
+            totalPeers: readyPeers.size
+        });
+
         for (const [peerId, conn] of connections) {
             if (readyPeers.has(peerId)) {
-                conn.send({
-                    type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_START,
-                    fileId: fileInfo.fileId
-                });
+                console.log('Sending start signal to peer:', peerId);
+                try {
+                    conn.send({
+                        type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_START,
+                        fileId: fileInfo.fileId
+                    });
+                } catch (error) {
+                    console.error('Failed to send start signal to peer:', {
+                        peerId,
+                        error: error.message
+                    });
+                }
             }
         }
     };
 
     // Request download from original sender for all connected peers
+    console.log('Requesting download from original sender:', fileInfo.originalSender);
     for (const [peerId, conn] of connections) {
         if (conn && conn.open && peerId === fileInfo.originalSender) {
+            console.log('Found original sender connection:', peerId);
             downloadingPeers.add(peerId);
-            conn.send({
-                type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST,
-                fileId: fileInfo.fileId,
-                fileName: fileInfo.fileName
-            });
+            try {
+                conn.send({
+                    type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST,
+                    fileId: fileInfo.fileId,
+                    fileName: fileInfo.fileName
+                });
+                console.log('Download request sent successfully to:', peerId);
+            } catch (error) {
+                console.error('Failed to send download request:', {
+                    peerId,
+                    error: error.message
+                });
+            }
         }
     }
 
+    if (downloadingPeers.size === 0) {
+        console.error('No connections found to original sender:', fileInfo.originalSender);
+        throw new Error('Original sender not connected');
+    }
+
+    console.log('Download requested from peers:', {
+        totalPeers: downloadingPeers.size,
+        peers: Array.from(downloadingPeers)
+    });
+
     // Add handlers for simultaneous download coordination
     const handleReadyResponse = (data, fromPeerId) => {
+        console.log('Received ready response:', {
+            fromPeerId,
+            fileId: data.fileId
+        });
+
         if (data.type === MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY && data.fileId === fileInfo.fileId) {
             readyPeers.add(fromPeerId);
+            console.log('Peer ready status updated:', {
+                readyPeers: Array.from(readyPeers),
+                totalReady: readyPeers.size,
+                totalNeeded: downloadingPeers.size
+            });
+
             if (readyPeers.size === downloadingPeers.size) {
+                console.log('All peers ready, starting download');
                 startDownloadForAll();
             }
         }
     };
 
     // Update connection handler to handle simultaneous downloads
+    console.log('Setting up data handlers for simultaneous download');
     const originalDataHandler = conn.dataHandler;
     conn.on('data', (data) => {
         if (data.type === MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY) {
@@ -1519,15 +1959,33 @@ async function initiateSimultaneousDownload(fileInfo) {
 
 // Update the download button click handler
 function createDownloadButton(fileInfo) {
+    console.log('Creating download button for file:', {
+        fileId: fileInfo.fileId,
+        fileName: fileInfo.fileName,
+        originalSender: fileInfo.originalSender
+    });
+
     const downloadButton = document.createElement('button');
     downloadButton.textContent = 'Download';
     downloadButton.classList.add('download-button');
     downloadButton.onclick = async () => {
+        console.log('Download button clicked for file:', {
+            fileId: fileInfo.fileId,
+            fileName: fileInfo.fileName
+        });
+
         try {
             showNotification(`Starting download of ${fileInfo.fileName}...`);
+            console.log('Initiating simultaneous download process');
             await initiateSimultaneousDownload(fileInfo);
+            console.log('Simultaneous download initiated successfully');
         } catch (error) {
-            console.error('Error initiating simultaneous download:', error);
+            console.error('Error initiating simultaneous download:', {
+                fileId: fileInfo.fileId,
+                fileName: fileInfo.fileName,
+                error: error.message,
+                stack: error.stack
+            });
             showNotification(`Failed to download ${fileInfo.fileName}: ${error.message}`, 'error');
         }
     };
@@ -1569,13 +2027,16 @@ function startEditingPeerId() {
 // Save edited peer ID
 async function saveEditedPeerId() {
     const newPeerId = elements.peerIdEdit.value.trim();
+    console.log('Attempting to save edited peer ID:', newPeerId);
     
     if (!newPeerId) {
+        console.warn('Empty peer ID provided');
         showNotification('Peer ID cannot be empty', 'error');
         return;
     }
     
     if (newPeerId.length < 3) {
+        console.warn('Peer ID too short:', newPeerId.length);
         showNotification('Peer ID must be at least 3 characters', 'error');
         return;
     }
@@ -1583,24 +2044,29 @@ async function saveEditedPeerId() {
     // Validate peer ID format
     const validIdRegex = /^[A-Za-z0-9_-]+$/;
     if (!validIdRegex.test(newPeerId)) {
+        console.warn('Invalid peer ID format:', newPeerId);
         showNotification('Peer ID can only contain letters, numbers, underscores, and hyphens', 'error');
         return;
     }
     
     try {
         // Show loading state
+        console.log('Updating connection status to connecting');
         updateConnectionStatus('connecting', 'Updating peer ID...');
         
         // Destroy existing peer if any
         if (peer) {
+            console.log('Destroying existing peer connection');
             peer.destroy();
             peer = null;
         }
         
         // Clear connections
+        console.log('Clearing existing connections');
         connections.clear();
         
         // Initialize new peer with custom ID
+        console.log('Initializing new peer with ID:', newPeerId);
         peer = new Peer(newPeerId, {
             debug: 2,
             config: {
@@ -1611,35 +2077,48 @@ async function saveEditedPeerId() {
             }
         });
         
+        console.log('Setting up peer handlers');
         setupPeerHandlers();
         
         // Wait for the peer to be ready
+        console.log('Waiting for peer connection to open');
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
+                console.error('Timeout waiting for peer connection');
                 reject(new Error('Timeout waiting for peer to open'));
             }, 10000); // 10 second timeout
 
             peer.once('open', () => {
+                console.log('Peer connection opened successfully');
                 clearTimeout(timeout);
                 resolve();
             });
 
             peer.once('error', (err) => {
+                console.error('Peer connection error:', err);
                 clearTimeout(timeout);
                 reject(err);
             });
         });
 
         // Update UI
+        console.log('Updating UI with new peer ID');
         elements.peerId.textContent = newPeerId;
         cancelEditingPeerId();
         
         // Generate new QR code
+        console.log('Generating new QR code');
         generateQRCode(newPeerId);
         
+        console.log('Peer ID updated successfully');
         showNotification('Peer ID updated successfully', 'success');
     } catch (error) {
-        console.error('Error updating peer ID:', error);
+        console.error('Error updating peer ID:', {
+            peerId: newPeerId,
+            error: error.message,
+            stack: error.stack,
+            type: error.type
+        });
         
         // Show specific error message for taken IDs
         if (error.type === 'unavailable-id') {
@@ -1651,6 +2130,7 @@ async function saveEditedPeerId() {
         updateConnectionStatus('', 'Failed to update peer ID');
         
         // Reinitialize with auto-generated ID
+        console.log('Reinitializing with auto-generated ID');
         initPeerJS();
     }
 }
@@ -1808,58 +2288,110 @@ const STORAGE_CONFIG = {
 // Enhanced Storage Manager
 class StorageManager {
     constructor() {
-        this.db = null;
-        this.fileSystem = null;
+        console.log('Creating StorageManager instance');
         this.capabilities = {
             fileSystem: false,
-            indexedDB: false,
-            webkitDirectory: false
+            webkitDirectory: false,
+            indexedDB: false
         };
     }
 
     async init() {
-        await this.detectCapabilities();
-        await this.initStorage();
+        console.log('Initializing StorageManager...');
+        try {
+            await this.detectCapabilities();
+            console.log('Storage capabilities detected:', this.capabilities);
+            
+            await this.initStorage();
+            console.log('Storage system initialized successfully');
+            
+            return true;
+        } catch (error) {
+            console.error('StorageManager initialization failed:', error);
+            throw error;
+        }
     }
 
     async detectCapabilities() {
-        // Check File System Access API
-        this.capabilities.fileSystem = 'showDirectoryPicker' in window;
-        
-        // Check IndexedDB
-        this.capabilities.indexedDB = 'indexedDB' in window;
-        
-        // Check WebKit Directory API
-        this.capabilities.webkitDirectory = 'webkitGetAsEntry' in DataTransferItem.prototype;
+        console.log('Detecting storage capabilities...');
+        try {
+            // Check File System Access API support
+            if ('showDirectoryPicker' in window) {
+                console.log('File System Access API supported');
+                this.capabilities.fileSystem = true;
+            }
+
+            // Check WebKit Directory API support
+            if ('webkitRequestFileSystem' in window) {
+                console.log('WebKit Directory API supported');
+                this.capabilities.webkitDirectory = true;
+            }
+
+            // Check IndexedDB support
+            if ('indexedDB' in window) {
+                console.log('IndexedDB supported');
+                this.capabilities.indexedDB = true;
+            }
+
+            console.log('Storage capabilities detection completed');
+        } catch (error) {
+            console.error('Error detecting storage capabilities:', error);
+            throw error;
+        }
     }
 
     async initStorage() {
-        // Initialize IndexedDB with new stores
-        if (this.capabilities.indexedDB) {
-            const request = indexedDB.open(DB_NAME, DB_VERSION + 1);
-            
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                
-                // Create stores if they don't exist
-                if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE)) {
-                    db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
-                }
-                if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_META_STORE)) {
-                    db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_META_STORE);
-                }
-                if (!db.objectStoreNames.contains(STORE_NAME)) {
-                    db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-                }
-            };
+        console.log('Initializing storage system...');
+        try {
+            // Initialize IndexedDB with new stores
+            if (this.capabilities.indexedDB) {
+                console.log('Initializing IndexedDB stores...');
+                return new Promise((resolve, reject) => {
+                    try {
+                        const request = indexedDB.open(DB_NAME, DB_VERSION);
+                        
+                        request.onupgradeneeded = (event) => {
+                            try {
+                                console.log('Upgrading IndexedDB schema...');
+                                const db = event.target.result;
+                                
+                                // Create stores if they don't exist
+                                if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE)) {
+                                    console.log('Creating chunk store...');
+                                    db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
+                                }
+                                if (!db.objectStoreNames.contains(STORAGE_CONFIG.INDEXEDDB_META_STORE)) {
+                                    console.log('Creating metadata store...');
+                                    db.createObjectStore(STORAGE_CONFIG.INDEXEDDB_META_STORE);
+                                }
+                                console.log('IndexedDB schema upgrade completed');
+                            } catch (error) {
+                                console.error('Error during IndexedDB schema upgrade:', error);
+                                reject(error);
+                            }
+                        };
 
-            return new Promise((resolve, reject) => {
-                request.onsuccess = (event) => {
-                    this.db = event.target.result;
-                    resolve();
-                };
-                request.onerror = () => reject(request.error);
-            });
+                        request.onsuccess = (event) => {
+                            console.log('IndexedDB opened successfully');
+                            this.db = event.target.result;
+                            resolve();
+                        };
+
+                        request.onerror = (event) => {
+                            console.error('Error opening IndexedDB:', event.target.error);
+                            reject(new Error('Failed to open IndexedDB'));
+                        };
+                    } catch (error) {
+                        console.error('Error initializing IndexedDB:', error);
+                        reject(error);
+                    }
+                });
+            } else {
+                console.log('IndexedDB not supported, skipping initialization');
+            }
+        } catch (error) {
+            console.error('Error initializing storage:', error);
+            throw error;
         }
     }
 
@@ -1899,130 +2431,334 @@ class StorageManager {
     }
 
     async storeFileChunk(fileId, chunkIndex, chunkData) {
+        console.log('Storing file chunk:', {
+            fileId,
+            chunkIndex,
+            chunkSize: chunkData.byteLength
+        });
+
         if (this.capabilities.fileSystem && this.fileSystem) {
+            console.log('Attempting to store using File System API...');
             try {
                 const fileHandle = await this.fileSystem.getFileHandle(`${fileId}_${chunkIndex}`, { create: true });
+                console.log('File handle created:', `${fileId}_${chunkIndex}`);
+                
                 const writable = await fileHandle.createWritable();
+                console.log('Writable stream created');
+                
                 await writable.write(chunkData);
+                console.log('Data written to file');
+                
                 await writable.close();
+                console.log('File System API storage successful');
                 return true;
             } catch (error) {
                 console.error('File System API storage failed:', error);
-                // Fallback to IndexedDB
+                console.log('Falling back to IndexedDB...');
             }
         }
         
         if (this.capabilities.indexedDB && this.db) {
+            console.log('Attempting to store using IndexedDB...');
             return new Promise((resolve, reject) => {
-                const transaction = this.db.transaction(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE, 'readwrite');
-                const store = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
-                const request = store.put(chunkData, `${fileId}_${chunkIndex}`);
-                
-                request.onsuccess = () => resolve(true);
-                request.onerror = () => reject(request.error);
+                try {
+                    const transaction = this.db.transaction(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE, 'readwrite');
+                    console.log('IndexedDB transaction created');
+                    
+                    const store = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
+                    const key = `${fileId}_${chunkIndex}`;
+                    console.log('Storing chunk with key:', key);
+                    
+                    const request = store.put(chunkData, key);
+                    
+                    request.onsuccess = () => {
+                        console.log('IndexedDB storage successful');
+                        resolve(true);
+                    };
+                    
+                    request.onerror = () => {
+                        console.error('IndexedDB storage failed:', request.error);
+                        reject(request.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        console.log('IndexedDB transaction completed');
+                    };
+                    
+                    transaction.onerror = (event) => {
+                        console.error('IndexedDB transaction failed:', event.target.error);
+                    };
+                } catch (error) {
+                    console.error('Error creating IndexedDB transaction:', error);
+                    reject(error);
+                }
             });
         }
         
-        throw new Error('No storage method available');
+        const error = new Error('No storage method available');
+        console.error(error);
+        throw error;
     }
 
     async getFileChunk(fileId, chunkIndex) {
+        console.log('Retrieving file chunk:', {
+            fileId,
+            chunkIndex
+        });
+
         if (this.capabilities.fileSystem && this.fileSystem) {
+            console.log('Attempting to retrieve using File System API...');
             try {
                 const fileHandle = await this.fileSystem.getFileHandle(`${fileId}_${chunkIndex}`);
+                console.log('File handle obtained:', `${fileId}_${chunkIndex}`);
+                
                 const file = await fileHandle.getFile();
-                return await file.arrayBuffer();
+                console.log('File object obtained');
+                
+                const buffer = await file.arrayBuffer();
+                console.log('File data read successfully:', {
+                    size: buffer.byteLength
+                });
+                
+                return buffer;
             } catch (error) {
                 console.error('File System API retrieval failed:', error);
-                // Fallback to IndexedDB
+                console.log('Falling back to IndexedDB...');
             }
         }
         
         if (this.capabilities.indexedDB && this.db) {
+            console.log('Attempting to retrieve using IndexedDB...');
             return new Promise((resolve, reject) => {
-                const transaction = this.db.transaction(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE, 'readonly');
-                const store = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
-                const request = store.get(`${fileId}_${chunkIndex}`);
-                
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
+                try {
+                    const transaction = this.db.transaction(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE, 'readonly');
+                    console.log('IndexedDB transaction created');
+                    
+                    const store = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
+                    const key = `${fileId}_${chunkIndex}`;
+                    console.log('Retrieving chunk with key:', key);
+                    
+                    const request = store.get(key);
+                    
+                    request.onsuccess = () => {
+                        if (request.result) {
+                            console.log('Chunk retrieved successfully:', {
+                                size: request.result.byteLength
+                            });
+                            resolve(request.result);
+                        } else {
+                            const error = new Error(`Chunk not found: ${key}`);
+                            console.error(error);
+                            reject(error);
+                        }
+                    };
+                    
+                    request.onerror = () => {
+                        console.error('IndexedDB retrieval failed:', request.error);
+                        reject(request.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        console.log('IndexedDB transaction completed');
+                    };
+                    
+                    transaction.onerror = (event) => {
+                        console.error('IndexedDB transaction failed:', event.target.error);
+                    };
+                } catch (error) {
+                    console.error('Error creating IndexedDB transaction:', error);
+                    reject(error);
+                }
             });
         }
         
-        throw new Error('No storage method available');
+        const error = new Error('No storage method available');
+        console.error(error);
+        throw error;
     }
 
     async cleanup(fileId) {
+        console.log('Starting cleanup for file:', fileId);
+        const errors = [];
+        
         if (this.capabilities.fileSystem && this.fileSystem) {
+            console.log('Cleaning up File System API storage...');
             try {
-                const entries = await this.fileSystem.entries();
-                for await (const [name, handle] of entries) {
-                    if (name.startsWith(`${fileId}_`)) {
-                        await this.fileSystem.removeEntry(name);
+                // List all files in the directory
+                for await (const [name, handle] of this.fileSystem.entries()) {
+                    // Check if the file belongs to this fileId
+                    if (name.startsWith(fileId)) {
+                        console.log('Removing file:', name);
+                        try {
+                            await this.fileSystem.removeEntry(name);
+                        } catch (error) {
+                            console.error('Error removing file:', name, error);
+                            errors.push(error);
+                        }
                     }
                 }
+                console.log('File System API cleanup completed');
             } catch (error) {
                 console.error('File System API cleanup failed:', error);
+                errors.push(error);
             }
         }
         
         if (this.capabilities.indexedDB && this.db) {
-            return new Promise((resolve, reject) => {
-                const transaction = this.db.transaction(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE, 'readwrite');
-                const store = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
-                const request = store.openCursor();
-                
-                request.onsuccess = () => {
-                    const cursor = request.result;
-                    if (cursor) {
-                        if (cursor.key.startsWith(`${fileId}_`)) {
-                            cursor.delete();
-                        }
-                        cursor.continue();
-                    } else {
+            console.log('Cleaning up IndexedDB storage...');
+            try {
+                await new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction([
+                        STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE,
+                        STORAGE_CONFIG.INDEXEDDB_META_STORE
+                    ], 'readwrite');
+                    
+                    transaction.onerror = (event) => {
+                        console.error('IndexedDB transaction error:', event.target.error);
+                        reject(event.target.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        console.log('IndexedDB cleanup completed');
                         resolve();
-                    }
-                };
-                request.onerror = () => reject(request.error);
-            });
+                    };
+                    
+                    // Clean up chunks
+                    const chunkStore = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_CHUNK_STORE);
+                    const chunkRequest = chunkStore.openCursor();
+                    
+                    chunkRequest.onsuccess = (event) => {
+                        const cursor = event.target.result;
+                        if (cursor) {
+                            if (cursor.key.toString().startsWith(fileId)) {
+                                console.log('Removing chunk:', cursor.key);
+                                cursor.delete();
+                            }
+                            cursor.continue();
+                        }
+                    };
+                    
+                    // Clean up metadata
+                    const metaStore = transaction.objectStore(STORAGE_CONFIG.INDEXEDDB_META_STORE);
+                    const metaRequest = metaStore.openCursor();
+                    
+                    metaRequest.onsuccess = (event) => {
+                        const cursor = event.target.result;
+                        if (cursor) {
+                            if (cursor.key.toString().startsWith(fileId)) {
+                                console.log('Removing metadata:', cursor.key);
+                                cursor.delete();
+                            }
+                            cursor.continue();
+                        }
+                    };
+                });
+            } catch (error) {
+                console.error('IndexedDB cleanup failed:', error);
+                errors.push(error);
+            }
+        }
+        
+        if (errors.length > 0) {
+            console.warn('Cleanup completed with errors:', errors);
+        } else {
+            console.log('Cleanup completed successfully');
         }
     }
 }
 
 // Update readFileChunk function to use storage manager
 async function readFileChunk(file, offset, length) {
+    console.log('Reading file chunk:', {
+        fileName: file.name,
+        offset,
+        length,
+        totalSize: file.size
+    });
+    
     return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        const blob = file.slice(offset, offset + length);
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsArrayBuffer(blob);
+        try {
+            console.log('Creating file slice...');
+            const blob = file.slice(offset, offset + length);
+            console.log('File slice created:', {
+                size: blob.size,
+                type: blob.type
+            });
+            
+            const reader = new FileReader();
+            
+            reader.onload = () => {
+                console.log('Chunk read successfully:', {
+                    size: reader.result.byteLength
+                });
+                resolve(reader.result);
+            };
+            
+            reader.onerror = () => {
+                console.error('Error reading file chunk:', reader.error);
+                reject(reader.error);
+            };
+            
+            reader.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    console.log('Read progress:', percent + '%');
+                }
+            };
+            
+            console.log('Starting chunk read...');
+            reader.readAsArrayBuffer(blob);
+        } catch (error) {
+            console.error('Error creating file slice:', error);
+            reject(error);
+        }
     });
 }
 
 // Update sendFile function to use enhanced chunked transfer
 async function sendFile(file, peerId) {
     try {
+        console.log('Starting file transfer:', {
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            peerId: peerId
+        });
+
         const conn = connections.get(peerId);
         if (!conn) {
-            throw new Error('No connection found for peer: ' + peerId);
+            const error = new Error('No connection found for peer: ' + peerId);
+            console.error(error);
+            throw error;
         }
+        console.log('Connection found for peer:', peerId);
 
         // Generate unique file ID
         const fileId = generateFileId(file);
         const chunkSize = STORAGE_CONFIG.CHUNK_SIZE;
+        console.log('File transfer configuration:', {
+            fileId,
+            chunkSize,
+            totalChunks: Math.ceil(file.size / chunkSize)
+        });
+
         let offset = 0;
         let chunkIndex = 0;
         
         // Request storage access if needed for large files
         if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Large file detected, requesting storage access...');
             const hasAccess = await storageManager.requestStorageAccess();
             if (!hasAccess) {
-                throw new Error('Storage access denied. Required for large files.');
+                const error = new Error('Storage access denied. Required for large files.');
+                console.error(error);
+                throw error;
             }
+            console.log('Storage access granted');
         }
 
         // Send file header
+        console.log('Sending file header...');
         conn.send({
             type: MESSAGE_TYPES.FILE_HEADER,
             fileId: fileId,
@@ -2031,20 +2767,32 @@ async function sendFile(file, peerId) {
             fileSize: file.size,
             chunkSize: chunkSize
         });
+        console.log('File header sent');
 
         // Update UI to show progress
+        console.log('Initializing progress display');
         updateTransferProgress(0);
         elements.transferProgress.classList.remove('hidden');
 
         // Read and send file in chunks
+        console.log('Starting chunk transfer...');
         while (offset < file.size) {
+            console.log('Processing chunk:', {
+                index: chunkIndex,
+                offset,
+                remaining: file.size - offset
+            });
+
             const chunk = await readFileChunk(file, offset, chunkSize);
             
             // Store chunk if file is large
             if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+                console.log('Storing large file chunk...');
                 await storageManager.storeFileChunk(fileId, chunkIndex, chunk);
+                console.log('Chunk stored successfully');
             }
             
+            console.log('Sending chunk to peer...');
             conn.send({
                 type: MESSAGE_TYPES.FILE_CHUNK,
                 fileId: fileId,
@@ -2052,11 +2800,13 @@ async function sendFile(file, peerId) {
                 offset: offset,
                 index: chunkIndex
             });
+            console.log('Chunk sent successfully');
 
             offset += chunk.byteLength;
             chunkIndex++;
             
             const progress = Math.min(100, Math.round((offset / file.size) * 100));
+            console.log('Transfer progress:', progress + '%');
             updateTransferProgress(progress);
             updateTransferInfo(`Sending: ${progress}%`);
 
@@ -2065,6 +2815,7 @@ async function sendFile(file, peerId) {
         }
 
         // Send file complete message
+        console.log('Sending file completion message...');
         conn.send({
             type: MESSAGE_TYPES.FILE_COMPLETE,
             fileId: fileId,
@@ -2073,8 +2824,10 @@ async function sendFile(file, peerId) {
             fileSize: file.size,
             totalChunks: chunkIndex
         });
+        console.log('File completion message sent');
 
         // Update UI on completion
+        console.log('Updating UI for completion...');
         updateTransferProgress(100);
         setTimeout(() => {
             elements.transferProgress.classList.add('hidden');
@@ -2083,10 +2836,13 @@ async function sendFile(file, peerId) {
 
         // Cleanup stored chunks if necessary
         if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Cleaning up stored chunks...');
             await storageManager.cleanup(fileId);
+            console.log('Cleanup completed');
         }
 
         // Add to transfer history
+        console.log('Updating transfer history...');
         const transfer = {
             fileName: file.name,
             fileType: file.type,
@@ -2102,8 +2858,14 @@ async function sendFile(file, peerId) {
         fileTransferHistory.get(peerId).push(transfer);
         updateFileTransferUI();
         broadcastFileHistory();
+        console.log('Transfer history updated');
 
-        console.log(`File transfer completed to peer: ${peerId}`);
+        console.log('File transfer completed successfully:', {
+            fileName: file.name,
+            peerId: peerId,
+            totalChunks: chunkIndex,
+            totalSize: file.size
+        });
         return true;
 
     } catch (error) {
@@ -2118,113 +2880,80 @@ async function sendFile(file, peerId) {
 // Update handleFileChunk to use storage manager for large files
 async function handleFileChunk(data) {
     try {
-        const { fileId, chunk, offset, index } = data;
-        const fileInfo = fileChunks[fileId];
-        
-        if (!fileInfo) {
-            throw new Error('No file info found for chunk');
-        }
+        console.log('Processing file chunk:', {
+            fileId: data.fileId,
+            chunkIndex: data.chunkIndex,
+            chunkSize: data.data.byteLength
+        });
 
-        // Store chunk if file is large
-        if (fileInfo.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            await storageManager.storeFileChunk(fileId, index, chunk);
-            fileInfo.receivedChunks.add(index);
+        const fileData = fileChunks[data.fileId];
+        if (!fileData) {
+            console.error('No file data found for file ID:', data.fileId);
+            return;
+        }
+        console.log('File data found:', {
+            fileName: fileData.fileName,
+            totalSize: fileData.size,
+            receivedSize: fileData.receivedSize
+        });
+
+        // Store the chunk
+        if (fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            console.log('Large file detected, storing chunk in storage manager...');
+            try {
+                await storageManager.storeFileChunk(data.fileId, data.chunkIndex, data.data);
+                fileData.receivedChunks.add(data.chunkIndex);
+                fileData.receivedSize += data.data.byteLength;
+                console.log('Chunk stored successfully:', {
+                    chunkIndex: data.chunkIndex,
+                    chunkSize: data.data.byteLength,
+                    totalReceived: fileData.receivedSize
+                });
+            } catch (error) {
+                console.error('Error storing chunk:', error);
+                throw error;
+            }
         } else {
-            fileInfo.chunks.push(chunk);
+            console.log('Small file, storing chunk in memory...');
+            fileData.chunks.push(data.data);
+            fileData.receivedSize += data.data.byteLength;
+            console.log('Chunk stored in memory:', {
+                chunkIndex: fileData.chunks.length - 1,
+                chunkSize: data.data.byteLength,
+                totalReceived: fileData.receivedSize
+            });
         }
 
-        fileInfo.receivedSize += chunk.byteLength;
-        const progress = Math.round((fileInfo.receivedSize / fileInfo.size) * 100);
-        updateTransferProgress(progress);
-        updateTransferInfo(`Receiving: ${progress}%`);
+        // Calculate and update progress
+        const progress = (fileData.receivedSize / fileData.size) * 100;
+        console.log('File transfer progress:', {
+            received: fileData.receivedSize,
+            total: fileData.size,
+            progress: progress.toFixed(2) + '%',
+            chunksReceived: fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE ? 
+                fileData.receivedChunks.size : 
+                fileData.chunks.length
+        });
+
+        // Update progress bar (update every 1% change)
+        if (!fileData.lastProgressUpdate || progress - fileData.lastProgressUpdate >= 1) {
+            console.log('Updating progress bar:', progress.toFixed(2) + '%');
+            updateTransferProgress(progress);
+            fileData.lastProgressUpdate = progress;
+        }
+
+        // Update transfer info
+        const receivedMB = (fileData.receivedSize / 1024 / 1024).toFixed(2);
+        const totalMB = (fileData.size / 1024 / 1024).toFixed(2);
+        const transferInfo = `Receiving: ${fileData.fileName} (${receivedMB}MB / ${totalMB}MB)`;
+        console.log('Updating transfer info:', transferInfo);
+        updateTransferInfo(transferInfo);
 
     } catch (error) {
         console.error('Error handling file chunk:', error);
-        showNotification('Error receiving file chunk', 'error');
+        showNotification(`Error processing file chunk: ${error.message}`, 'error');
+        throw error;
     }
-}
-
-// Update handleFileComplete to handle large files
-async function handleFileComplete(data) {
-    try {
-        const { fileId, fileName, fileType, fileSize, totalChunks } = data;
-        const fileInfo = fileChunks[fileId];
-        
-        if (!fileInfo) {
-            throw new Error('No file info found');
-        }
-
-        let finalBlob;
-        
-        if (fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            // Reconstruct file from stored chunks
-            const chunks = [];
-            for (let i = 0; i < totalChunks; i++) {
-                const chunk = await storageManager.getFileChunk(fileId, i);
-                chunks.push(chunk);
-            }
-            finalBlob = new Blob(chunks, { type: fileType });
-            
-            // Cleanup stored chunks
-            await storageManager.cleanup(fileId);
-        } else {
-            finalBlob = new Blob(fileInfo.chunks, { type: fileType });
-        }
-
-        // Create object URL for the file
-        const url = URL.createObjectURL(finalBlob);
-
-        // Update transfer history
-        const transfer = {
-            fileName,
-            fileType,
-            fileSize,
-            timestamp: new Date().toISOString(),
-            direction: 'received',
-            url,
-            peerId: fileInfo.peerId
-        };
-
-        if (!fileTransferHistory.has(fileInfo.peerId)) {
-            fileTransferHistory.set(fileInfo.peerId, []);
-        }
-        fileTransferHistory.get(fileInfo.peerId).push(transfer);
-        updateFileTransferUI();
-        broadcastFileHistory();
-
-        // Cleanup
-        delete fileChunks[fileId];
-        elements.transferProgress.classList.add('hidden');
-        updateTransferInfo('');
-        
-        showNotification(`Received: ${fileName}`, 'success');
-
-    } catch (error) {
-        console.error('Error completing file transfer:', error);
-        showNotification('Error completing file transfer', 'error');
-        elements.transferProgress.classList.add('hidden');
-        updateTransferInfo('');
-    }
-}
-
-// Update handleFileHeader to prepare for large files
-async function handleFileHeader(data) {
-    const { fileId, fileName, fileType, fileSize, chunkSize } = data;
-    
-    fileChunks[fileId] = {
-        fileName,
-        fileType,
-        size: fileSize,
-        receivedSize: 0,
-        chunks: [],
-        receivedChunks: new Set(),
-        peerId: data.peerId || 'unknown'
-    };
-
-    // Show progress UI
-    elements.transferProgress.classList.remove('hidden');
-    updateTransferProgress(0);
-    updateTransferInfo('Receiving: 0%');
 }
 
 // Helper function to update transfer progress
@@ -2232,3 +2961,80 @@ function updateTransferProgress(percent) {
     elements.progress.style.width = `${percent}%`;
     elements.progress.setAttribute('aria-valuenow', percent);
 }
+
+// Initialize storage manager
+async function initStorageManager() {
+    try {
+        console.log('Initializing storage manager...');
+        storageManager = new StorageManager();
+        
+        console.log('Detecting storage capabilities...');
+        await storageManager.init();
+        console.log('Storage capabilities detected:', storageManager.capabilities);
+        
+        // Request storage access if needed for large files
+        console.log('Requesting storage access...');
+        const hasAccess = await storageManager.requestStorageAccess().catch(error => {
+            console.warn('Storage access request failed:', error);
+            return false;
+        });
+        
+        if (!hasAccess) {
+            console.log('No persistent storage access, will use fallback methods');
+            showNotification('Using fallback storage methods for large files', 'warning');
+        } else {
+            console.log('Storage access granted');
+        }
+        
+        console.log('Storage manager initialized successfully');
+        return storageManager;
+    } catch (error) {
+        console.error('Failed to initialize storage manager:', error);
+        showNotification('Storage initialization failed, using fallback methods', 'error');
+        throw error;
+    }
+}
+
+// Update init function to handle initialization order
+async function init() {
+    console.log('Starting initialization...');
+    
+    if (!checkBrowserSupport()) {
+        console.error('Browser support check failed');
+        return;
+    }
+
+    updateConnectionStatus('', 'Initializing...');
+
+    try {
+        // Initialize IndexedDB first
+        console.log('Initializing IndexedDB...');
+        await initIndexedDB().catch(error => {
+            console.error('IndexedDB initialization failed:', error);
+            throw error;
+        });
+        console.log('IndexedDB initialized successfully');
+        
+        // Initialize storage manager
+        console.log('Initializing storage manager...');
+        try {
+            await initStorageManager();
+            console.log('Storage manager initialized successfully');
+        } catch (error) {
+            console.error('Storage initialization error:', error);
+            showNotification('Storage system will use fallback methods', 'warning');
+        }
+        
+        // Initialize PeerJS with timeout and retry
+        console.log('Initializing PeerJS...');
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        while (retryCount < maxRetries) {
+            try {
+                await initPeerJS();
+                console.log('PeerJS initialized successfully');
+                break; // Success, exit the loop
+            } catch (error) {
+                retryCount++;
+                console.error(`

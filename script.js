@@ -21,8 +21,7 @@ const MESSAGE_TYPES = {
     DISCONNECT_NOTIFICATION: 'disconnect-notification',
     SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
     SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
-    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start',
-    TEXT_MESSAGE: 'text-message'
+    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
 };
 
 // DOM Elements
@@ -54,18 +53,7 @@ const elements = {
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
-    cancelEditButton: document.getElementById('cancel-edit'),
-    setupModal: document.getElementById('setup-modal'),
-    chatContainer: document.getElementById('chat-container'),
-    messages: document.getElementById('messages'),
-    messageInput: document.getElementById('message-input'),
-    sendMessage: document.getElementById('send-message'),
-    backToSetup: document.getElementById('back-to-setup'),
-    toggleFiles: document.getElementById('toggle-files'),
-    filesPanel: document.getElementById('files-panel'),
-    closeFiles: document.getElementById('close-files'),
-    attachButton: document.getElementById('attach-button'),
-    connectedPeer: document.getElementById('connected-peer')
+    cancelEditButton: document.getElementById('cancel-edit')
 };
 
 // State
@@ -391,10 +379,6 @@ function setupConnectionHandlers(conn) {
 
     conn.on('data', async (data) => {
         try {
-            if (data.type === MESSAGE_TYPES.TEXT_MESSAGE) {
-                addMessage(data.text, 'incoming');
-                return;
-            }
             switch (data.type) {
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
                     await handleSimultaneousDownloadRequest(data, conn);
@@ -1175,91 +1159,6 @@ elements.fileInput.addEventListener('change', (e) => {
     }
 });
 
-// Message handling functions
-function createMessageElement(message, type = 'outgoing') {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${type}`;
-    
-    const messageContent = document.createElement('div');
-    messageContent.className = 'message-content';
-    messageContent.textContent = message;
-    
-    const messageTime = document.createElement('span');
-    messageTime.className = 'message-time';
-    messageTime.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
-    if (type === 'outgoing') {
-        const messageStatus = document.createElement('span');
-        messageStatus.className = 'message-status';
-        messageStatus.innerHTML = '<span class="material-icons">done_all</span>';
-        messageTime.appendChild(messageStatus);
-    }
-    
-    messageDiv.appendChild(messageContent);
-    messageDiv.appendChild(messageTime);
-    
-    return messageDiv;
-}
-
-function addMessage(message, type = 'outgoing') {
-    const messageElement = createMessageElement(message, type);
-    elements.messages.appendChild(messageElement);
-    elements.messages.scrollTop = elements.messages.scrollHeight;
-}
-
-function sendTextMessage(text) {
-    if (!text.trim() || connections.size === 0) return;
-    
-    const message = {
-        type: MESSAGE_TYPES.TEXT_MESSAGE,
-        text: text.trim(),
-        timestamp: Date.now()
-    };
-    
-    // Send to all connected peers
-    for (const conn of connections.values()) {
-        if (conn.open) {
-            conn.send(message);
-        }
-    }
-    
-    // Add to our messages
-    addMessage(text);
-    
-    // Clear input
-    elements.messageInput.value = '';
-}
-
-// UI Event Handlers
-elements.sendMessage.addEventListener('click', () => {
-    sendTextMessage(elements.messageInput.value);
-});
-
-elements.messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendTextMessage(elements.messageInput.value);
-    }
-});
-
-elements.attachButton.addEventListener('click', () => {
-    elements.fileInput.click();
-});
-
-elements.toggleFiles.addEventListener('click', () => {
-    elements.filesPanel.classList.toggle('show');
-});
-
-elements.closeFiles.addEventListener('click', () => {
-    elements.filesPanel.classList.remove('show');
-});
-
-elements.backToSetup.addEventListener('click', () => {
-    elements.chatContainer.classList.add('hidden');
-    elements.setupModal.classList.remove('hidden');
-    resetConnection();
-});
-
 // Initialize the application
 function init() {
     if (!checkBrowserSupport()) {
@@ -1272,10 +1171,6 @@ function init() {
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
     initPeerIdEditing(); // Initialize peer ID editing
-    
-    // Show setup modal initially
-    elements.setupModal.classList.remove('hidden');
-    elements.chatContainer.classList.add('hidden');
 }
 
 // Add CSS classes for notification styling
@@ -1317,31 +1212,16 @@ document.head.appendChild(style);
 
 // Add function to update connection status
 function updateConnectionStatus(status, message) {
-    const statusDot = elements.statusDot;
-    const statusText = elements.statusText;
+    elements.statusDot.className = 'status-dot ' + (status || '');
+    elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
     
-    statusDot.className = 'status-dot';
-    
-    switch (status) {
-        case 'connected':
-            statusDot.classList.add('connected');
-            elements.chatContainer.classList.remove('hidden');
-            elements.setupModal.classList.add('hidden');
-            elements.connectedPeer.textContent = Array.from(connections.keys()).join(', ');
-            break;
-        case 'disconnected':
-            statusDot.classList.add('disconnected');
-            elements.connectedPeer.textContent = 'Not Connected';
-            break;
-        case 'connecting':
-            statusDot.classList.add('connecting');
-            elements.connectedPeer.textContent = 'Connecting...';
-            break;
-        default:
-            elements.connectedPeer.textContent = 'Not Connected';
+    // Update title to show number of connections
+    if (connections && connections.size > 0) {
+        document.title = `(${connections.size}) One-Host`;
+    } else {
+        document.title = 'One-Host';
     }
-    
-    statusText.textContent = message || status;
+    updateEditButtonState(); // Add this line
 }
 
 // Update files list display
@@ -1853,32 +1733,6 @@ function initPeerIdEditing() {
             }
         });
     }
-}
-
-// Update file transfer UI
-function updateFileTransferUI() {
-    const sentList = elements.sentFilesList;
-    const receivedList = elements.receivedFilesList;
-    
-    // Clear existing lists
-    sentList.innerHTML = '';
-    receivedList.innerHTML = '';
-    
-    // Process sent files
-    fileHistory.sent.forEach(fileId => {
-        const fileInfo = getFileInfo(fileId);
-        if (fileInfo) {
-            updateFilesList(sentList, fileInfo, 'sent');
-        }
-    });
-    
-    // Process received files
-    fileHistory.received.forEach(fileId => {
-        const fileInfo = getFileInfo(fileId);
-        if (fileInfo) {
-            updateFilesList(receivedList, fileInfo, 'received');
-        }
-    });
 }
 
 init();

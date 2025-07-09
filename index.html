@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
   
   <!-- Primary Meta Tags -->
   <title>One-Host</title>
@@ -26,12 +26,10 @@
   <meta property="og:site_name" content="One-Host">
   <meta property="og:title" content="One-Host - Secure P2P File Sharing">
   <meta property="og:description" content="Share files instantly and securely between devices using One-Host's peer-to-peer WebRTC technology. No server required!">
-  <!-- Primary og:image for WhatsApp -->
   <meta property="og:image" content="https://yadavshashankr.github.io/one-host/assets/og-whatsapp.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="400">
   <meta property="og:image:height" content="400">
-  <!-- Secondary og:image for other platforms -->
   <meta property="og:image" content="https://yadavshashankr.github.io/one-host/assets/og.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
@@ -64,26 +62,34 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- Material Icons -->
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="logo-container">
-        <img src="assets/logo.svg" alt="One-Host" class="logo">
+  <div class="app-container">
+    <!-- Sidebar for connection info -->
+    <aside class="connection-sidebar" id="connection-sidebar">
+      <div class="sidebar-header">
+        <div class="logo-container">
+          <img src="assets/logo.svg" alt="One-Host" class="logo">
+        </div>
+        <button id="toggle-sidebar" class="icon-button mobile-only" title="Toggle Sidebar">
+          <span class="material-icons">menu</span>
+        </button>
       </div>
-      <div id="browser-support" class="hidden warning">
-        ⚠️ Your browser may not fully support WebRTC features
-      </div>
-    </header>
 
-    <main>
-      <section id="connection-section">
-        <div class="peer-info">
-          <h2>Your Peer ID</h2>
+      <div class="connection-content">
+        <div id="browser-support" class="hidden warning">
+          ⚠️ Your browser may not fully support WebRTC features
+        </div>
+
+        <!-- Your ID Section -->
+        <div class="peer-info section">
+          <h2>Your ID</h2>
           <div class="peer-id-container">
             <div class="peer-id-display">
               <span id="peer-id">Generating...</span>
-              <input type="text" id="peer-id-edit" class="peer-id-edit hidden" maxlength="20" placeholder="Enter custom peer ID">
+              <input type="text" id="peer-id-edit" class="peer-id-edit hidden" maxlength="20" placeholder="Enter custom ID">
             </div>
             <div class="peer-actions">
               <button id="edit-id" class="icon-button" title="Edit ID">
@@ -108,7 +114,8 @@
           </div>
         </div>
 
-        <div class="connect-peer">
+        <!-- Connect Section -->
+        <div class="connect-peer section">
           <h2>Connect to Peer</h2>
           <div class="input-group">
             <div class="peer-input-container">
@@ -130,46 +137,65 @@
           </div>
         </div>
 
-        <div id="connection-status" class="status">
+        <!-- Connection Status -->
+        <div id="connection-status" class="status section">
           <div class="status-indicator">
             <div id="status-dot" class="status-dot"></div>
             <span id="status-text">Initializing...</span>
           </div>
         </div>
-      </section>
 
-      <section id="file-transfer-section" class="hidden">
-        <div class="file-input-container">
-          <div class="drop-zone" id="drop-zone">
-            <input type="file" id="file-input" multiple>
-            <div class="drop-zone-text">
-              <span class="material-icons">upload_file</span>
-              <span>Drop files here or click to select</span>
-            </div>
+        <!-- Active Peers -->
+        <div class="active-peers section">
+          <h2>Active Peers</h2>
+          <ul id="active-peers-list" class="active-peers-list">
+            <li class="empty-message">No active connections</li>
+          </ul>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main class="chat-area" id="chat-area">
+      <!-- Chat Header -->
+      <div class="chat-header">
+        <button id="show-sidebar" class="icon-button mobile-only" title="Show Sidebar">
+          <span class="material-icons">menu</span>
+        </button>
+        <div class="chat-header-info">
+          <h2 id="chat-title">File Sharing</h2>
+          <div id="chat-subtitle" class="subtitle">Not connected</div>
+        </div>
+      </div>
+
+      <!-- Chat Messages -->
+      <div class="chat-messages" id="chat-messages">
+        <div class="welcome-message">
+          <h3>Welcome to One-Host!</h3>
+          <p>Connect with a peer to start sharing files securely.</p>
+        </div>
+      </div>
+
+      <!-- File Input Area -->
+      <div class="file-input-area" id="file-input-area">
+        <div class="drop-zone" id="drop-zone">
+          <input type="file" id="file-input" multiple>
+          <div class="drop-zone-text">
+            <span class="material-icons">upload_file</span>
+            <span>Drop files here or click to select</span>
           </div>
         </div>
 
-        <div id="transfer-progress" class="hidden">
-          <h3>Transfer Progress</h3>
+        <!-- Transfer Progress -->
+        <div id="transfer-progress" class="transfer-progress hidden">
           <div class="progress-container">
             <div class="progress-bar">
               <div id="progress" class="progress"></div>
             </div>
           </div>
-          <div id="transfer-info"></div>
+          <div id="transfer-info" class="transfer-info"></div>
         </div>
-
-        <div id="files-history" class="files-history">
-          <div class="files-section">
-            <h3>Sent Files</h3>
-            <ul id="sent-files-list" class="files-list"></ul>
-          </div>
-          <div class="files-section">
-            <h3>Received Files</h3>
-            <ul id="received-files-list" class="files-list"></ul>
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
 
     <div id="notifications" class="notifications"></div>

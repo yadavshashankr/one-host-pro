@@ -1735,4 +1735,189 @@ function initPeerIdEditing() {
     }
 }
 
+// Add mobile sidebar handlers
+document.getElementById('toggle-sidebar').addEventListener('click', () => {
+    document.getElementById('connection-sidebar').classList.toggle('show');
+});
+
+document.getElementById('show-sidebar').addEventListener('click', () => {
+    document.getElementById('connection-sidebar').classList.add('show');
+});
+
+// Close sidebar when clicking outside on mobile
+document.addEventListener('click', (e) => {
+    const sidebar = document.getElementById('connection-sidebar');
+    const toggleBtn = document.getElementById('toggle-sidebar');
+    const showBtn = document.getElementById('show-sidebar');
+    
+    if (window.innerWidth <= 768 && 
+        !sidebar.contains(e.target) && 
+        e.target !== toggleBtn &&
+        e.target !== showBtn) {
+        sidebar.classList.remove('show');
+    }
+});
+
+// Update file transfer UI for chat-like interface
+function updateFileTransferUI() {
+    console.log('Updating file transfer UI');
+
+    const chatMessages = document.getElementById('chat-messages');
+    const processedFiles = new Set();
+
+    // Clear existing messages
+    const welcomeMessage = chatMessages.querySelector('.welcome-message');
+    chatMessages.innerHTML = '';
+    if (welcomeMessage) {
+        chatMessages.appendChild(welcomeMessage);
+    }
+
+    // Process each peer's history
+    fileHistory.forEach((transfers, peerId) => {
+        console.log(`Processing history for peer ${peerId}`);
+
+        transfers.forEach(transfer => {
+            // Skip if we've already processed this file
+            if (processedFiles.has(transfer.fileId)) {
+                console.log(`Skipping duplicate file: ${transfer.fileName}`);
+                return;
+            }
+            processedFiles.add(transfer.fileId);
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `file-message ${transfer.direction === 'sent' ? 'sent' : 'received'}`;
+
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'file-info';
+            
+            // Add file icon
+            const icon = document.createElement('span');
+            icon.className = 'material-icons';
+            icon.textContent = getFileIcon(transfer.fileType);
+            fileInfo.appendChild(icon);
+
+            const details = document.createElement('div');
+            details.className = 'file-details';
+            details.innerHTML = `
+                <div class="file-name">${transfer.fileName}</div>
+                <div class="file-size">${formatFileSize(transfer.fileSize)}</div>
+                <div class="file-time">${new Date(transfer.timestamp).toLocaleString()}</div>
+            `;
+            fileInfo.appendChild(details);
+            messageDiv.appendChild(fileInfo);
+
+            // Add download button for received files
+            if (transfer.direction === 'received') {
+                console.log(`Creating download button for received file: ${transfer.fileName}`);
+                const downloadButton = document.createElement('button');
+                downloadButton.className = 'download-button';
+                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                downloadButton.title = 'Download file';
+                
+                downloadButton.addEventListener('click', async () => {
+                    console.log(`Download button clicked for file: ${transfer.fileName}`);
+                    try {
+                        const fileBlob = sentFileBlobs.get(transfer.fileId);
+                        if (!fileBlob) {
+                            throw new Error('File data not found');
+                        }
+
+                        // Create download link
+                        const url = URL.createObjectURL(fileBlob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = transfer.fileName;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        console.log(`File ${transfer.fileName} downloaded successfully`);
+                        showNotification(`File ${transfer.fileName} downloaded successfully`, 'success');
+                    } catch (error) {
+                        console.error('Error downloading file:', error);
+                        showNotification(`Error downloading file: ${error.message}`, 'error');
+                    }
+                });
+
+                messageDiv.appendChild(downloadButton);
+            }
+
+            chatMessages.appendChild(messageDiv);
+        });
+    });
+
+    // Scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Update connection status UI
+function updateConnectionStatus(status, message) {
+    const statusDot = elements.statusDot;
+    const statusText = elements.statusText;
+    const chatTitle = document.getElementById('chat-title');
+    const chatSubtitle = document.getElementById('chat-subtitle');
+
+    statusDot.className = 'status-dot';
+    
+    switch (status) {
+        case 'connected':
+            statusDot.classList.add('connected');
+            chatTitle.textContent = 'Connected';
+            chatSubtitle.textContent = `Connected to ${Array.from(connections.keys()).join(', ')}`;
+            elements.fileTransferSection.classList.remove('hidden');
+            break;
+        case 'disconnected':
+            statusDot.classList.add('disconnected');
+            chatTitle.textContent = 'File Sharing';
+            chatSubtitle.textContent = 'Not connected';
+            elements.fileTransferSection.classList.add('hidden');
+            break;
+        case 'connecting':
+            statusDot.classList.add('connecting');
+            chatTitle.textContent = 'Connecting...';
+            chatSubtitle.textContent = message || 'Establishing connection...';
+            break;
+        default:
+            chatTitle.textContent = 'File Sharing';
+            chatSubtitle.textContent = message || 'Not connected';
+    }
+    
+    statusText.textContent = message || status;
+}
+
+// Update active peers list
+function updateActivePeersList() {
+    const activePeersList = document.getElementById('active-peers-list');
+    activePeersList.innerHTML = '';
+
+    const activePeers = Array.from(connections.entries())
+        .filter(([_, conn]) => conn && conn.open);
+
+    if (activePeers.length === 0) {
+        activePeersList.innerHTML = '<li class="empty-message">No active connections</li>';
+        return;
+    }
+
+    activePeers.forEach(([peerId, conn]) => {
+        const li = document.createElement('li');
+        li.className = 'active-peer';
+        li.innerHTML = `
+            <span class="material-icons">person</span>
+            <span class="peer-id">${peerId}</span>
+            <button class="disconnect-button" title="Disconnect">
+                <span class="material-icons">close</span>
+            </button>
+        `;
+
+        li.querySelector('.disconnect-button').addEventListener('click', () => {
+            conn.close();
+            updateActivePeersList();
+            updateConnectionStatus('disconnected');
+        });
+
+        activePeersList.appendChild(li);
+    });
+}
+
 init();

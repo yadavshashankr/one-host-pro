@@ -1031,6 +1031,50 @@ elements.dropZone.addEventListener('drop', (e) => {
     processFileQueue();
 });
 
+// Add connect button event handler
+elements.connectButton.addEventListener('click', () => {
+    const remotePeerIdValue = elements.remotePeerId.value.trim();
+    if (!remotePeerIdValue) {
+        showNotification('Please enter a Peer ID', 'error');
+        return;
+    }
+
+    if (connections.has(remotePeerIdValue)) {
+        showNotification('Already connected to this peer', 'warning');
+        return;
+    }
+
+    try {
+        console.log('Attempting to connect to:', remotePeerIdValue);
+        updateConnectionStatus('connecting', 'Connecting...');
+        
+        // Check if we have a valid peer instance
+        if (!peer || peer.destroyed) {
+            console.log('Peer instance not ready, reinitializing...');
+            initPeerJS();
+            
+            // Wait for peer to be ready before connecting
+            peer.once('open', () => {
+                const conn = peer.connect(remotePeerIdValue, {
+                    reliable: true
+                });
+                connections.set(remotePeerIdValue, conn);
+                setupConnectionHandlers(conn);
+            });
+        } else {
+            const conn = peer.connect(remotePeerIdValue, {
+                reliable: true
+            });
+            connections.set(remotePeerIdValue, conn);
+            setupConnectionHandlers(conn);
+        }
+    } catch (error) {
+        console.error('Connection attempt error:', error);
+        showNotification('Failed to establish connection', 'error');
+        updateConnectionStatus('', 'Connection failed');
+    }
+});
+
 // Update the initialization
 function init() {
     if (!checkBrowserSupport()) {

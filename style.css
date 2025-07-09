@@ -572,3 +572,66 @@ input[type="file"] {
 .icon-button:disabled:hover {
     background-color: transparent;
 }
+
+#received-files-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#received-files-list li {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    transition: background-color 0.2s;
+}
+
+#received-files-list li:hover {
+    background-color: #f5f5f5;
+}
+
+#received-files-list .file-info {
+    display: flex;
+    flex-direction: column;
+    margin-left: 10px;
+    flex-grow: 1;
+}
+
+#received-files-list .file-name {
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+#received-files-list .file-details {
+    font-size: 0.85em;
+    color: #666;
+    margin-bottom: 2px;
+}
+
+#received-files-list .peer-info {
+    font-size: 0.85em;
+    color: #888;
+}
+
+#received-files-list .fas.fa-file {
+    color: #4a90e2;
+    font-size: 1.2em;
+    margin-right: 10px;
+}
+
+.download-btn {
+    background: none;
+    border: none;
+    color: #4a90e2;
+    cursor: pointer;
+    padding: 5px;
+    margin-left: auto;
+    transition: color 0.2s;
+}
+
+.download-btn:hover {
+    color: #357abd;
+}

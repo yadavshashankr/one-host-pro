@@ -84,6 +84,9 @@ const MAX_RECENT_PEERS = 5;
 let fileQueue = [];
 let isProcessingQueue = false;
 
+// Add this near the top with other global variables
+const fileTransferHistory = new Map(); // Stores file transfer history for all peers
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -359,8 +362,8 @@ function initPeerJS() {
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
+        updateConnectionStatus('connected', `Connected to ${conn.peer}`);
         isConnectionReady = true;
-        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
         
@@ -370,11 +373,14 @@ function setupConnectionHandlers(conn) {
             connectionTimeouts.delete(conn.peer);
         }
         
-        // Send a connection notification to the other peer
+        // Send connection notification and file transfer history
         conn.send({
             type: 'connection-notification',
             peerId: peer.id
         });
+        
+        // Share file transfer history with the new peer
+        sendFileTransferHistory(conn);
     });
 
     conn.on('data', async (data) => {
@@ -451,6 +457,18 @@ function setupConnectionHandlers(conn) {
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
+                    break;
+                case 'transfer-history':
+                    // Handle received file transfer history
+                    console.log('Received file transfer history:', data.history);
+                    data.history.forEach(peerHistory => {
+                        const [peerId, transfers] = peerHistory;
+                        if (!fileTransferHistory.has(peerId)) {
+                            fileTransferHistory.set(peerId, []);
+                        }
+                        fileTransferHistory.get(peerId).push(...transfers);
+                    });
+                    updateFileTransferUI();
                     break;
                 default:
                     console.error('Unknown data type:', data.type);
@@ -1736,3 +1754,75 @@ function initPeerIdEditing() {
 }
 
 init();
+
+// Function to send file transfer history to a new peer
+function sendFileTransferHistory(conn) {
+    const historyArray = Array.from(fileTransferHistory.entries());
+    conn.send({
+        type: 'transfer-history',
+        history: historyArray
+    });
+}
+
+// Function to update the UI with all file transfers
+function updateFileTransferUI() {
+    const receivedFilesList = document.getElementById('received-files-list');
+    receivedFilesList.innerHTML = ''; // Clear current list
+
+    // Sort all transfers by timestamp
+    const allTransfers = [];
+    fileTransferHistory.forEach((transfers, peerId) => {
+        transfers.forEach(transfer => {
+            allTransfers.push({ ...transfer, peerId });
+        });
+    });
+
+    allTransfers.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    allTransfers.forEach(transfer => {
+        const li = document.createElement('li');
+        const fileIcon = document.createElement('i');
+        fileIcon.className = 'fas fa-file';
+        
+        const fileInfo = document.createElement('div');
+        fileInfo.className = 'file-info';
+        
+        const fileName = document.createElement('span');
+        fileName.className = 'file-name';
+        fileName.textContent = transfer.fileName;
+        
+        const fileDetails = document.createElement('span');
+        fileDetails.className = 'file-details';
+        fileDetails.textContent = `${formatFileSize(transfer.fileSize)} • ${formatTimestamp(transfer.timestamp)}`;
+        
+        const peerInfo = document.createElement('span');
+        peerInfo.className = 'peer-info';
+        peerInfo.textContent = `${transfer.direction === 'received' ? 'From' : 'To'}: ${transfer.peerId}`;
+        
+        fileInfo.appendChild(fileName);
+        fileInfo.appendChild(fileDetails);
+        fileInfo.appendChild(peerInfo);
+        
+        // Add download button for received files with URLs
+        if (transfer.direction === 'received' && transfer.url) {
+            const downloadBtn = document.createElement('a');
+            downloadBtn.href = transfer.url;
+            downloadBtn.download = transfer.fileName;
+            downloadBtn.className = 'download-btn';
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+            downloadBtn.title = 'Download file';
+            fileInfo.appendChild(downloadBtn);
+        }
+        
+        li.appendChild(fileIcon);
+        li.appendChild(fileInfo);
+        
+        receivedFilesList.appendChild(li);
+    });
+}
+
+// Helper function to format timestamp
+function formatTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleString();
+}

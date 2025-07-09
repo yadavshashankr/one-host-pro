@@ -81,8 +81,20 @@
         <div class="peer-info">
           <h2>Your Peer ID</h2>
           <div class="peer-id-container">
-            <span id="peer-id">Generating...</span>
+            <div class="peer-id-display">
+              <span id="peer-id">Generating...</span>
+              <input type="text" id="peer-id-edit" class="peer-id-edit hidden" maxlength="20" placeholder="Enter custom peer ID">
+            </div>
             <div class="peer-actions">
+              <button id="edit-id" class="icon-button" title="Edit ID">
+                <span class="material-icons">edit</span>
+              </button>
+              <button id="save-id" class="icon-button hidden" title="Save ID">
+                <span class="material-icons">check</span>
+              </button>
+              <button id="cancel-edit" class="icon-button hidden" title="Cancel">
+                <span class="material-icons">close</span>
+              </button>
               <button id="copy-id" class="icon-button" title="Copy ID">
                 <span class="material-icons">content_copy</span>
               </button>

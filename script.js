@@ -8,7 +8,17 @@ const CONNECTION_TIMEOUT = 60000; // 60 seconds
 
 // Add simultaneous download message types
 const MESSAGE_TYPES = {
-    // ... existing code ...
+    FILE_INFO: 'file-info',
+    FILE_HEADER: 'file-header',
+    FILE_CHUNK: 'file-chunk',
+    FILE_COMPLETE: 'file-complete',
+    BLOB_REQUEST: 'blob-request',
+    BLOB_REQUEST_FORWARDED: 'blob-request-forwarded',
+    BLOB_ERROR: 'blob-error',
+    CONNECTION_NOTIFICATION: 'connection-notification',
+    KEEP_ALIVE: 'keep-alive',
+    KEEP_ALIVE_RESPONSE: 'keep-alive-response',
+    DISCONNECT_NOTIFICATION: 'disconnect-notification',
     SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
     SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
     SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
@@ -38,7 +48,12 @@ const elements = {
     receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
     recentPeersList: document.getElementById('recent-peers-list'),
-    clearPeers: document.getElementById('clear-peers')
+    clearPeers: document.getElementById('clear-peers'),
+    // Add new elements for peer ID editing
+    peerIdEdit: document.getElementById('peer-id-edit'),
+    editIdButton: document.getElementById('edit-id'),
+    saveIdButton: document.getElementById('save-id'),
+    cancelEditButton: document.getElementById('cancel-edit')
 };
 
 // State
@@ -246,6 +261,7 @@ function initPeerJS() {
             updateConnectionStatus('', 'Ready to connect');
             generateQRCode(id);
             initShareButton(); // Initialize share button after getting peer ID
+            updateEditButtonState(); // Add this line
         });
 
         peer.on('connection', (conn) => {
@@ -1110,6 +1126,7 @@ function init() {
     loadRecentPeers();
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
+    initPeerIdEditing(); // Initialize peer ID editing
 }
 
 // Add CSS classes for notification styling
@@ -1160,6 +1177,7 @@ function updateConnectionStatus(status, message) {
     } else {
         document.title = 'One-Host';
     }
+    updateEditButtonState(); // Add this line
 }
 
 // Update files list display
@@ -1519,6 +1537,127 @@ function createDownloadButton(fileInfo) {
         }
     };
     return downloadButton;
+}
+
+// Check if peer ID editing is allowed
+function isEditingAllowed() {
+    const statusText = elements.statusText.textContent;
+    const hasConnections = connections.size > 0;
+    return statusText === 'Ready to connect' && !hasConnections;
+}
+
+// Update edit button state based on connection status
+function updateEditButtonState() {
+    if (elements.editIdButton) {
+        const canEdit = isEditingAllowed();
+        elements.editIdButton.disabled = !canEdit;
+        elements.editIdButton.title = canEdit ? 'Edit ID' : 'Cannot edit ID while connected';
+    }
+}
+
+// Start editing peer ID
+function startEditingPeerId() {
+    if (!isEditingAllowed()) return;
+    
+    const currentId = elements.peerId.textContent;
+    elements.peerIdEdit.value = currentId;
+    
+    elements.peerId.classList.add('hidden');
+    elements.peerIdEdit.classList.remove('hidden');
+    elements.editIdButton.classList.add('hidden');
+    elements.saveIdButton.classList.remove('hidden');
+    elements.cancelEditButton.classList.remove('hidden');
+    elements.peerIdEdit.focus();
+    elements.peerIdEdit.select();
+}
+
+// Save edited peer ID
+async function saveEditedPeerId() {
+    const newPeerId = elements.peerIdEdit.value.trim();
+    
+    if (!newPeerId) {
+        showNotification('Peer ID cannot be empty', 'error');
+        return;
+    }
+    
+    if (newPeerId.length < 3) {
+        showNotification('Peer ID must be at least 3 characters', 'error');
+        return;
+    }
+    
+    try {
+        // Show loading state
+        updateConnectionStatus('connecting', 'Updating peer ID...');
+        
+        // Disconnect current peer
+        if (peer) {
+            peer.destroy();
+        }
+        
+        // Clear connections
+        connections.clear();
+        
+        // Initialize new peer with custom ID
+        peer = new Peer(newPeerId, {
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
+        
+        // Setup peer event handlers
+        setupPeerHandlers();
+        
+        // Update UI
+        elements.peerId.textContent = newPeerId;
+        cancelEditingPeerId();
+        
+        // Generate new QR code
+        generateQRCode(newPeerId);
+        
+        showNotification('Peer ID updated successfully', 'success');
+    } catch (error) {
+        console.error('Error updating peer ID:', error);
+        showNotification('Failed to update peer ID. Please try again.', 'error');
+        updateConnectionStatus('', 'Failed to update peer ID');
+        
+        // Reinitialize with auto-generated ID
+        initPeerJS();
+    }
+}
+
+// Cancel editing peer ID
+function cancelEditingPeerId() {
+    elements.peerId.classList.remove('hidden');
+    elements.peerIdEdit.classList.add('hidden');
+    elements.editIdButton.classList.remove('hidden');
+    elements.saveIdButton.classList.add('hidden');
+    elements.cancelEditButton.classList.add('hidden');
+}
+
+// Initialize peer ID editing
+function initPeerIdEditing() {
+    if (elements.editIdButton) {
+        elements.editIdButton.addEventListener('click', startEditingPeerId);
+    }
+    if (elements.saveIdButton) {
+        elements.saveIdButton.addEventListener('click', saveEditedPeerId);
+    }
+    if (elements.cancelEditButton) {
+        elements.cancelEditButton.addEventListener('click', cancelEditingPeerId);
+    }
+    if (elements.peerIdEdit) {
+        elements.peerIdEdit.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                saveEditedPeerId();
+            } else if (e.key === 'Escape') {
+                cancelEditingPeerId();
+            }
+        });
+    }
 }
 
 init();

@@ -256,54 +256,7 @@ function initPeerJS() {
             }
         });
 
-        peer.on('open', (id) => {
-            elements.peerId.textContent = id;
-            updateConnectionStatus('', 'Ready to connect');
-            generateQRCode(id);
-            initShareButton(); // Initialize share button after getting peer ID
-            updateEditButtonState(); // Add this line
-        });
-
-        peer.on('connection', (conn) => {
-            console.log('Incoming connection from:', conn.peer);
-            connections.set(conn.peer, conn);
-            updateConnectionStatus('connecting', 'Incoming connection...');
-            setupConnectionHandlers(conn);
-        });
-
-        peer.on('error', (error) => {
-            console.error('PeerJS Error:', error);
-            let errorMessage = 'Connection error';
-            
-            // Handle specific error types
-            if (error.type === 'peer-unavailable') {
-                errorMessage = 'Peer is not available or does not exist';
-            } else if (error.type === 'network') {
-                errorMessage = 'Network connection error';
-            } else if (error.type === 'disconnected') {
-                errorMessage = 'Disconnected from server';
-            } else if (error.type === 'server-error') {
-                errorMessage = 'Server error occurred';
-            }
-            
-            updateConnectionStatus('', errorMessage);
-            showNotification(errorMessage, 'error');
-            resetConnection();
-        });
-
-        peer.on('disconnected', () => {
-            console.log('Peer disconnected');
-            updateConnectionStatus('', 'Disconnected');
-            isConnectionReady = false;
-            
-            // Try to reconnect
-            setTimeout(() => {
-                if (peer && peer.disconnected) {
-                    console.log('Attempting to reconnect...');
-                    peer.reconnect();
-                }
-            }, 3000);
-        });
+        setupPeerHandlers();
     } catch (error) {
         console.error('PeerJS Initialization Error:', error);
         updateConnectionStatus('', 'Initialization failed');
@@ -1608,9 +1561,25 @@ async function saveEditedPeerId() {
             }
         });
         
-        // Setup peer event handlers
         setupPeerHandlers();
         
+        // Wait for the peer to be ready
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Timeout waiting for peer to open'));
+            }, 5000);
+
+            peer.once('open', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+
+            peer.once('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+
         // Update UI
         elements.peerId.textContent = newPeerId;
         cancelEditingPeerId();
@@ -1621,7 +1590,14 @@ async function saveEditedPeerId() {
         showNotification('Peer ID updated successfully', 'success');
     } catch (error) {
         console.error('Error updating peer ID:', error);
-        showNotification('Failed to update peer ID. Please try again.', 'error');
+        
+        // Show specific error message for taken IDs
+        if (error.type === 'unavailable-id') {
+            showNotification('This ID is already taken. Please try another one.', 'error');
+        } else {
+            showNotification('Failed to update peer ID. Please try again.', 'error');
+        }
+        
         updateConnectionStatus('', 'Failed to update peer ID');
         
         // Reinitialize with auto-generated ID

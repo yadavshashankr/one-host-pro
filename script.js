@@ -37,25 +37,22 @@ const elements = {
     transferProgress: document.getElementById('transfer-progress'),
     progress: document.getElementById('progress'),
     transferInfo: document.getElementById('transfer-info'),
-    fileList: document.getElementById('file-list'),
     statusText: document.getElementById('status-text'),
     statusDot: document.getElementById('status-dot'),
     browserSupport: document.getElementById('browser-support'),
     fileTransferSection: document.getElementById('file-transfer-section'),
     qrcode: document.getElementById('qrcode'),
-    receivedFiles: document.getElementById('received-files'),
     notifications: document.getElementById('notifications'),
     sentFilesList: document.getElementById('sent-files-list'),
     receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
     recentPeersList: document.getElementById('recent-peers-list'),
     clearPeers: document.getElementById('clear-peers'),
-    // Add new elements for peer ID editing
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
     cancelEditButton: document.getElementById('cancel-edit'),
-    fileHistory: document.getElementById('file-history')
+    filesHistory: document.getElementById('files-history')
 };
 
 // Add notification system
@@ -2134,53 +2131,91 @@ function updateFileTransferUI() {
     console.log('Updating file transfer UI');
 
     // Clear existing history
-    elements.fileHistory.innerHTML = '';
-    elements.receivedFiles.innerHTML = '';
+    elements.sentFilesList.innerHTML = '';
+    elements.receivedFilesList.innerHTML = '';
 
     // Process each peer's history
     fileTransferHistory.forEach((transfers, peerId) => {
         console.log(`Processing history for peer ${peerId}`);
 
         transfers.forEach(transfer => {
-            const fileEntry = document.createElement('div');
-            fileEntry.className = 'file-entry';
+            const li = document.createElement('li');
+            li.className = 'file-item';
 
             const fileInfo = document.createElement('div');
             fileInfo.className = 'file-info';
-            fileInfo.innerHTML = `
+            
+            // Add file icon based on type
+            const icon = document.createElement('span');
+            icon.className = 'material-icons';
+            icon.textContent = getFileIcon(transfer.fileType);
+            fileInfo.appendChild(icon);
+
+            const details = document.createElement('div');
+            details.className = 'file-details';
+            details.innerHTML = `
                 <span class="file-name">${transfer.fileName}</span>
                 <span class="file-size">${formatFileSize(transfer.fileSize)}</span>
                 <span class="file-time">${new Date(transfer.timestamp).toLocaleString()}</span>
             `;
-
-            fileEntry.appendChild(fileInfo);
+            fileInfo.appendChild(details);
+            li.appendChild(fileInfo);
 
             // Add download button for received files
             if (transfer.direction === 'received') {
                 console.log(`Creating download button for received file: ${transfer.fileName}`);
-                const downloadButton = createDownloadButton(transfer.fileId, transfer.fileName);
-                if (downloadButton) {
-                    fileEntry.appendChild(downloadButton);
-                }
-                elements.receivedFiles.appendChild(fileEntry);
+                const downloadButton = document.createElement('button');
+                downloadButton.className = 'download-button';
+                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                downloadButton.title = 'Download file';
+                
+                downloadButton.addEventListener('click', async () => {
+                    console.log(`Download button clicked for file: ${transfer.fileName}`);
+                    try {
+                        const fileBlob = sentFileBlobs.get(transfer.fileId);
+                        if (!fileBlob) {
+                            throw new Error('File data not found');
+                        }
+
+                        // Create download link
+                        const url = URL.createObjectURL(fileBlob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = transfer.fileName;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        console.log(`File ${transfer.fileName} downloaded successfully`);
+                        showNotification(`File ${transfer.fileName} downloaded successfully`, 'success');
+                    } catch (error) {
+                        console.error('Error downloading file:', error);
+                        showNotification(`Error downloading file: ${error.message}`, 'error');
+                    }
+                });
+
+                li.appendChild(downloadButton);
+                elements.receivedFilesList.appendChild(li);
             } else {
                 // For sent files
                 console.log(`Adding sent file to history: ${transfer.fileName}`);
                 const status = document.createElement('span');
                 status.className = 'file-status';
-                status.textContent = `Sent to ${transfer.peerId}`;
-                fileEntry.appendChild(status);
-                elements.fileHistory.appendChild(fileEntry);
+                status.innerHTML = `<span class="material-icons">send</span>`;
+                status.title = `Sent to ${transfer.peerId}`;
+                li.appendChild(status);
+                elements.sentFilesList.appendChild(li);
             }
         });
     });
 
     // Update empty state messages
-    if (elements.fileHistory.children.length === 0) {
-        elements.fileHistory.innerHTML = '<div class="empty-message">No files sent yet</div>';
+    if (elements.sentFilesList.children.length === 0) {
+        elements.sentFilesList.innerHTML = '<li class="empty-message">No files sent yet</li>';
     }
-    if (elements.receivedFiles.children.length === 0) {
-        elements.receivedFiles.innerHTML = '<div class="empty-message">No files received yet</div>';
+    if (elements.receivedFilesList.children.length === 0) {
+        elements.receivedFilesList.innerHTML = '<li class="empty-message">No files received yet</li>';
     }
 
     console.log('File transfer UI updated');

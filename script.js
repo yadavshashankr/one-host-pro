@@ -509,9 +509,9 @@ function setupConnectionHandlers(conn) {
     });
 }
 
-// Helper function to generate unique file ID
+// Helper function to generate a unique file ID
 function generateFileId(file) {
-    return `${file.name}-${file.size}`;
+    return `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
 // Handle file header
@@ -1774,7 +1774,18 @@ function broadcastFileHistory() {
     });
 }
 
-// Update sendFile function to broadcast history after sending
+// Add readFileChunk function
+function readFileChunk(file, offset, length) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        const blob = file.slice(offset, offset + length);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(blob);
+    });
+}
+
+// Update sendFile function
 async function sendFile(file, peerId) {
     try {
         const conn = connections.get(peerId);
@@ -1782,33 +1793,14 @@ async function sendFile(file, peerId) {
             throw new Error('No connection found for peer: ' + peerId);
         }
 
-        // Add to transfer history before sending
-        if (!fileTransferHistory.has(peerId)) {
-            fileTransferHistory.set(peerId, []);
-        }
-        
-        const transfer = {
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            timestamp: new Date().toISOString(),
-            direction: 'sent'
-        };
-        
-        fileTransferHistory.get(peerId).push(transfer);
-        updateFileTransferUI();
-        
-        // Broadcast updated history to all peers
-        broadcastFileHistory();
-
         // Generate unique file ID
-        const fileId = generateFileId();
-        const chunkSize = 16384; // 16KB chunks
+        const fileId = generateFileId(file);
+        const chunkSize = CHUNK_SIZE;
         let offset = 0;
         
-        // Send file start message
+        // Send file header
         conn.send({
-            type: 'file-start',
+            type: MESSAGE_TYPES.FILE_HEADER,
             fileId: fileId,
             fileName: file.name,
             fileType: file.type,
@@ -1816,7 +1808,7 @@ async function sendFile(file, peerId) {
         });
 
         // Update UI to show progress
-        updateProgress(0);
+        updateTransferProgress(0);
         elements.transferProgress.classList.remove('hidden');
 
         // Read and send file in chunks
@@ -1824,7 +1816,7 @@ async function sendFile(file, peerId) {
             const chunk = await readFileChunk(file, offset, chunkSize);
             
             conn.send({
-                type: 'file-chunk',
+                type: MESSAGE_TYPES.FILE_CHUNK,
                 fileId: fileId,
                 chunk: chunk,
                 offset: offset
@@ -1832,16 +1824,16 @@ async function sendFile(file, peerId) {
 
             offset += chunk.byteLength;
             const progress = Math.min(100, Math.round((offset / file.size) * 100));
-            updateProgress(progress);
+            updateTransferProgress(progress);
             updateTransferInfo(`Sending: ${progress}%`);
 
             // Add a small delay between chunks to prevent overwhelming the connection
             await new Promise(resolve => setTimeout(resolve, 10));
         }
 
-        // Send file end message
+        // Send file complete message
         conn.send({
-            type: 'file-end',
+            type: MESSAGE_TYPES.FILE_COMPLETE,
             fileId: fileId,
             fileName: file.name,
             fileType: file.type,
@@ -1849,11 +1841,28 @@ async function sendFile(file, peerId) {
         });
 
         // Update UI on completion
-        updateProgress(100);
+        updateTransferProgress(100);
         setTimeout(() => {
             elements.transferProgress.classList.add('hidden');
             updateTransferInfo('');
         }, 1000);
+
+        // Add to transfer history
+        const transfer = {
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            timestamp: new Date().toISOString(),
+            direction: 'sent',
+            peerId: peerId
+        };
+        
+        if (!fileTransferHistory.has(peerId)) {
+            fileTransferHistory.set(peerId, []);
+        }
+        fileTransferHistory.get(peerId).push(transfer);
+        updateFileTransferUI();
+        broadcastFileHistory();
 
         console.log(`File transfer completed to peer: ${peerId}`);
         return true;

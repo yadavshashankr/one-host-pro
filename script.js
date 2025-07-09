@@ -1083,9 +1083,13 @@ function init() {
 
     // Remove any existing event listeners
     elements.fileInput.removeEventListener('change', handleFileSelect);
+    elements.dropZone.removeEventListener('click', () => elements.fileInput.click());
     
     // Setup file input handler
     elements.fileInput.addEventListener('change', handleFileSelect);
+    
+    // Setup drop zone click handler
+    elements.dropZone.addEventListener('click', () => elements.fileInput.click());
     
     // Initialize other components
     initPeerJS();

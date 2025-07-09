@@ -54,7 +54,8 @@ const elements = {
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
-    cancelEditButton: document.getElementById('cancel-edit')
+    cancelEditButton: document.getElementById('cancel-edit'),
+    fileHistory: document.getElementById('file-history')
 };
 
 // Add notification system
@@ -644,84 +645,35 @@ function generateFileId(file) {
     return `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Handle file header
+// Handle incoming file header
 async function handleFileHeader(data) {
+    console.log('Received file header:', {
+        fileName: data.fileName,
+        fileSize: formatFileSize(data.fileSize),
+        fileId: data.fileId
+    });
+
     try {
-        console.log('Processing file header:', data);
-        const { fileId, fileName, fileType, fileSize, chunkSize } = data;
-        
-        // Validate required fields
-        if (!fileId || !fileName || !fileType || !fileSize) {
-            const error = new Error('Missing required file information');
-            console.error(error);
-            throw error;
-        }
-
-        // Validate file size
-        if (fileSize <= 0) {
-            const error = new Error('Invalid file size');
-            console.error(error);
-            throw error;
-        }
-
-        // Check if we already have a file with this ID
-        if (fileChunks[fileId]) {
-            const error = new Error('File transfer already in progress');
-            console.error(error);
-            throw error;
-        }
-
-        console.log('File validation successful:', {
-            fileName,
-            fileType,
-            fileSize,
-            chunkSize
-        });
-
         // Initialize file data structure
-        console.log('Initializing file data structure...');
-        if (fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            console.log('Large file detected, using storage manager...');
-            fileChunks[fileId] = {
-                fileName: fileName,
-                fileType: fileType,
-                size: fileSize,
-                receivedSize: 0,
-                receivedChunks: new Set(),
-                peerId: data.peerId
-            };
-            console.log('File data structure initialized for storage manager');
-        } else {
-            console.log('Small file, using memory storage...');
-            fileChunks[fileId] = {
-                fileName: fileName,
-                fileType: fileType,
-                size: fileSize,
-                receivedSize: 0,
-                chunks: [],
-                peerId: data.peerId
-            };
-            console.log('File data structure initialized for memory storage');
-        }
+        fileChunks[data.fileId] = {
+            fileName: data.fileName,
+            fileType: data.fileType,
+            size: data.fileSize,
+            chunks: [],
+            receivedChunks: new Set(),
+            receivedSize: 0,
+            totalChunks: data.totalChunks
+        };
 
-        // Update UI
-        console.log('Updating UI...');
-        updateTransferProgress(0);
+        // Show progress bar
         elements.transferProgress.classList.remove('hidden');
-        updateTransferInfo(`Receiving: ${fileName}`);
-        console.log('UI updated');
+        updateTransferProgress(0);
+        updateTransferInfo(`Receiving ${data.fileName}...`);
 
-        console.log('File header processing completed successfully:', {
-            fileId,
-            fileName,
-            storageType: fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE ? 'storage manager' : 'memory'
-        });
-
+        console.log('File header processed successfully');
     } catch (error) {
         console.error('Error handling file header:', error);
-        showNotification(`Error processing file header: ${error.message}`, 'error');
-        elements.transferProgress.classList.add('hidden');
-        updateTransferInfo('');
+        showNotification(`Error receiving file: ${error.message}`, 'error');
         throw error;
     }
 }
@@ -805,138 +757,76 @@ async function handleFileChunk(data) {
     }
 }
 
-// Update handleFileComplete to handle large files
+// Handle file transfer completion
 async function handleFileComplete(data) {
+    console.log('Received file completion message:', {
+        fileName: data.fileName,
+        fileId: data.fileId
+    });
+
     try {
-        console.log('Processing file completion:', data);
-        const { fileId, fileName, fileType, fileSize, totalChunks } = data;
-        const fileInfo = fileChunks[fileId];
-        
-        if (!fileInfo) {
-            const error = new Error('No file info found');
-            console.error(error);
-            throw error;
+        const fileData = fileChunks[data.fileId];
+        if (!fileData) {
+            throw new Error('No file data found');
         }
 
-        console.log('File info:', {
-            fileName,
-            fileType,
-            fileSize,
-            totalChunks,
-            receivedSize: fileInfo.receivedSize
-        });
-
-        // Verify we have all chunks
-        if (fileSize > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            console.log('Large file detected, verifying chunks from storage...');
-            const missingChunks = [];
-            for (let i = 0; i < totalChunks; i++) {
-                if (!fileInfo.receivedChunks.has(i)) {
-                    console.warn('Missing chunk:', i);
-                    missingChunks.push(i);
-                }
-            }
-
-            if (missingChunks.length > 0) {
-                const error = new Error(`Missing chunks: ${missingChunks.join(', ')}`);
-                console.error(error);
-                throw error;
-            }
-            console.log('All chunks verified successfully');
-
-            // Combine chunks from storage
-            console.log('Combining chunks from storage...');
+        let finalBlob;
+        if (fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
+            // Retrieve chunks from storage manager
+            console.log('Retrieving large file chunks from storage');
             const chunks = [];
-            for (let i = 0; i < totalChunks; i++) {
-                console.log('Reading chunk:', i);
-                const chunk = await storageManager.getFileChunk(fileId, i);
+            for (let i = 0; i < fileData.totalChunks; i++) {
+                const chunk = await storageManager.getFileChunk(data.fileId, i);
+                if (!chunk) {
+                    throw new Error(`Missing chunk ${i}`);
+                }
                 chunks.push(chunk);
             }
-            console.log('All chunks read from storage');
-
-            // Create blob
-            console.log('Creating file blob...');
-            const blob = new Blob(chunks, { type: fileType });
-            console.log('File blob created:', {
-                size: blob.size,
-                type: blob.type
-            });
-
+            finalBlob = new Blob(chunks, { type: fileData.fileType });
+            
             // Clean up storage
-            console.log('Cleaning up storage...');
-            await storageManager.cleanup(fileId);
-            console.log('Storage cleanup completed');
-
-            // Download file
-            console.log('Initiating file download...');
-            downloadBlob(blob, fileName, fileId);
-            console.log('File download initiated');
-
+            await storageManager.cleanup(data.fileId);
         } else {
-            console.log('Small file, combining chunks from memory...');
-            // Verify we have all chunks
-            if (fileInfo.chunks.length !== totalChunks) {
-                const error = new Error(`Missing chunks. Expected: ${totalChunks}, Got: ${fileInfo.chunks.length}`);
-                console.error(error);
-                throw error;
-            }
-            console.log('All chunks verified successfully');
-
-            // Create blob
-            console.log('Creating file blob...');
-            const blob = new Blob(fileInfo.chunks, { type: fileType });
-            console.log('File blob created:', {
-                size: blob.size,
-                type: blob.type
-            });
-
-            // Download file
-            console.log('Initiating file download...');
-            downloadBlob(blob, fileName, fileId);
-            console.log('File download initiated');
+            // Combine chunks in memory
+            console.log('Combining file chunks in memory');
+            finalBlob = new Blob(fileData.chunks, { type: fileData.fileType });
         }
 
-        // Update UI
-        console.log('Updating UI...');
-        updateTransferProgress(100);
-        setTimeout(() => {
-            elements.transferProgress.classList.add('hidden');
-            updateTransferInfo('');
-        }, 1000);
+        // Hide progress bar
+        elements.transferProgress.classList.add('hidden');
+        updateTransferInfo('');
 
         // Add to transfer history
-        console.log('Updating transfer history...');
+        console.log('Updating transfer history');
         const transfer = {
-            fileName: fileName,
-            fileType: fileType,
-            fileSize: fileSize,
+            fileId: data.fileId,
+            fileName: fileData.fileName,
+            fileSize: fileData.size,
+            fileType: fileData.fileType,
             timestamp: new Date().toISOString(),
             direction: 'received',
-            peerId: fileInfo.peerId
+            peerId: peer.id
         };
-        
-        if (!fileTransferHistory.has(fileInfo.peerId)) {
-            fileTransferHistory.set(fileInfo.peerId, []);
+
+        if (!fileTransferHistory.has(peer.id)) {
+            fileTransferHistory.set(peer.id, []);
         }
-        fileTransferHistory.get(fileInfo.peerId).push(transfer);
+        fileTransferHistory.get(peer.id).push(transfer);
+
+        // Update UI and broadcast history
+        console.log('Updating UI and broadcasting history');
         updateFileTransferUI();
         broadcastFileHistory();
-        console.log('Transfer history updated');
 
-        // Clean up memory
-        console.log('Cleaning up memory...');
-        delete fileChunks[fileId];
-        console.log('Memory cleanup completed');
+        // Clean up
+        delete fileChunks[data.fileId];
 
-        console.log('File completion processing finished successfully:', {
-            fileName,
-            fileSize,
-            totalChunks
-        });
+        console.log('File transfer completed successfully');
+        showNotification(`File ${fileData.fileName} received successfully`, 'success');
 
     } catch (error) {
-        console.error('Error handling file completion:', error);
-        showNotification(`Error completing file transfer: ${error.message}`, 'error');
+        console.error('Error completing file transfer:', error);
+        showNotification(`Error receiving file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
         updateTransferInfo('');
         throw error;
@@ -1313,6 +1203,12 @@ function initFileHandlers() {
     // File input handler
     elements.fileInput.addEventListener('change', handleFileSelect);
     
+    // Make the drop zone clickable
+    elements.dropZone.addEventListener('click', () => {
+        console.log('Drop zone clicked, triggering file input');
+        elements.fileInput.click();
+    });
+    
     // Drag and drop handlers
     elements.dropZone.addEventListener('dragover', handleDragOver);
     elements.dropZone.addEventListener('dragleave', (e) => {
@@ -1321,6 +1217,9 @@ function initFileHandlers() {
         elements.dropZone.classList.remove('drag-over');
     });
     elements.dropZone.addEventListener('drop', handleDrop);
+    
+    // Add cursor pointer to drop zone
+    elements.dropZone.style.cursor = 'pointer';
     
     console.log('File handlers initialized');
 }
@@ -2230,66 +2129,103 @@ function formatFileSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// Function to update the UI with all file transfers
+// Update file transfer history UI
 function updateFileTransferUI() {
     console.log('Updating file transfer UI');
-    const receivedFilesList = document.getElementById('received-files-list');
-    receivedFilesList.innerHTML = ''; // Clear current list
 
-    // Sort all transfers by timestamp
-    const allTransfers = [];
+    // Clear existing history
+    elements.fileHistory.innerHTML = '';
+    elements.receivedFiles.innerHTML = '';
+
+    // Process each peer's history
     fileTransferHistory.forEach((transfers, peerId) => {
+        console.log(`Processing history for peer ${peerId}`);
+
         transfers.forEach(transfer => {
-            allTransfers.push({ ...transfer, peerId });
+            const fileEntry = document.createElement('div');
+            fileEntry.className = 'file-entry';
+
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'file-info';
+            fileInfo.innerHTML = `
+                <span class="file-name">${transfer.fileName}</span>
+                <span class="file-size">${formatFileSize(transfer.fileSize)}</span>
+                <span class="file-time">${new Date(transfer.timestamp).toLocaleString()}</span>
+            `;
+
+            fileEntry.appendChild(fileInfo);
+
+            // Add download button for received files
+            if (transfer.direction === 'received') {
+                console.log(`Creating download button for received file: ${transfer.fileName}`);
+                const downloadButton = createDownloadButton(transfer.fileId, transfer.fileName);
+                if (downloadButton) {
+                    fileEntry.appendChild(downloadButton);
+                }
+                elements.receivedFiles.appendChild(fileEntry);
+            } else {
+                // For sent files
+                console.log(`Adding sent file to history: ${transfer.fileName}`);
+                const status = document.createElement('span');
+                status.className = 'file-status';
+                status.textContent = `Sent to ${transfer.peerId}`;
+                fileEntry.appendChild(status);
+                elements.fileHistory.appendChild(fileEntry);
+            }
         });
     });
 
-    allTransfers.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    allTransfers.forEach(transfer => {
-        console.log('Processing transfer:', transfer);
-        const li = document.createElement('li');
-        const fileIcon = document.createElement('i');
-        fileIcon.className = 'fas fa-file';
-        
-        const fileInfo = document.createElement('div');
-        fileInfo.className = 'file-info';
-        
-        const fileName = document.createElement('span');
-        fileName.className = 'file-name';
-        fileName.textContent = transfer.fileName;
-        
-        const fileDetails = document.createElement('span');
-        fileDetails.className = 'file-details';
-        const formattedSize = formatFileSize(transfer.fileSize);
-        const formattedDate = formatTimestamp(transfer.timestamp);
-        fileDetails.textContent = `${formattedSize} • ${formattedDate} • ${transfer.direction === 'sent' ? 'Sent to' : 'Received from'} ${transfer.peerId}`;
-        
-        fileInfo.appendChild(fileName);
-        fileInfo.appendChild(fileDetails);
-        
-        li.appendChild(fileIcon);
-        li.appendChild(fileInfo);
-        
-        if (transfer.direction === 'received') {
-            const downloadButton = createDownloadButton({
-                fileId: transfer.fileId,
-                fileName: transfer.fileName,
-                originalSender: transfer.peerId
-            });
-            li.appendChild(downloadButton);
-        }
-        
-        receivedFilesList.appendChild(li);
-    });
+    // Update empty state messages
+    if (elements.fileHistory.children.length === 0) {
+        elements.fileHistory.innerHTML = '<div class="empty-message">No files sent yet</div>';
+    }
+    if (elements.receivedFiles.children.length === 0) {
+        elements.receivedFiles.innerHTML = '<div class="empty-message">No files received yet</div>';
+    }
 
     console.log('File transfer UI updated');
 }
 
-// Helper function to format timestamp
-function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    return date.toLocaleString();
+// Create download button for a file
+function createDownloadButton(fileId, fileName) {
+    console.log(`Creating download button for file: ${fileName} (ID: ${fileId})`);
+
+    try {
+        const button = document.createElement('button');
+        button.className = 'download-button';
+        button.textContent = 'Download';
+
+        button.addEventListener('click', async () => {
+            console.log(`Download button clicked for file: ${fileName}`);
+            try {
+                const fileBlob = sentFileBlobs.get(fileId);
+                if (!fileBlob) {
+                    throw new Error('File data not found');
+                }
+
+                // Create download link
+                const url = URL.createObjectURL(fileBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                console.log(`File ${fileName} downloaded successfully`);
+                showNotification(`File ${fileName} downloaded successfully`, 'success');
+            } catch (error) {
+                console.error('Error downloading file:', error);
+                showNotification(`Error downloading file: ${error.message}`, 'error');
+            }
+        });
+
+        return button;
+    } catch (error) {
+        console.error('Error creating download button:', error);
+        return null;
+    }
 }
 
 // Function to merge received file history with local history
@@ -2769,157 +2705,115 @@ async function readFileChunk(file, offset, length) {
     });
 }
 
-// Update sendFile function to use enhanced chunked transfer
+// Send file to peer
 async function sendFile(file, peerId) {
-    try {
-        console.log('Starting file transfer:', {
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            peerId: peerId
-        });
+    console.log('Starting file transfer:', {
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        peerId: peerId
+    });
 
+    try {
         const conn = connections.get(peerId);
-        if (!conn) {
-            const error = new Error('No connection found for peer: ' + peerId);
-            console.error(error);
-            throw error;
+        if (!conn || !conn.open) {
+            throw new Error('No active connection to peer');
         }
-        console.log('Connection found for peer:', peerId);
 
         // Generate unique file ID
         const fileId = generateFileId(file);
-        const chunkSize = STORAGE_CONFIG.CHUNK_SIZE;
-        console.log('File transfer configuration:', {
-            fileId,
-            chunkSize,
-            totalChunks: Math.ceil(file.size / chunkSize)
-        });
+        console.log('Generated file ID:', fileId);
 
-        let offset = 0;
-        let chunkIndex = 0;
-        
-        // Request storage access if needed for large files
-        if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            console.log('Large file detected, requesting storage access...');
-            const hasAccess = await storageManager.requestStorageAccess();
-            if (!hasAccess) {
-                const error = new Error('Storage access denied. Required for large files.');
-                console.error(error);
-                throw error;
-            }
-            console.log('Storage access granted');
-        }
+        // Store the file blob for later use
+        const fileBlob = new Blob([file], { type: file.type });
+        sentFileBlobs.set(fileId, fileBlob);
 
-        // Send file header
-        console.log('Sending file header...');
+        // Show transfer progress
+        elements.transferProgress.classList.remove('hidden');
+        updateTransferProgress(0);
+        updateTransferInfo(`Sending ${file.name} to ${peerId}...`);
+
+        // Send file header first
+        console.log('Sending file header');
         conn.send({
             type: MESSAGE_TYPES.FILE_HEADER,
             fileId: fileId,
             fileName: file.name,
-            fileType: file.type,
             fileSize: file.size,
-            chunkSize: chunkSize
+            fileType: file.type,
+            totalChunks: Math.ceil(file.size / CHUNK_SIZE)
         });
-        console.log('File header sent');
 
-        // Update UI to show progress
-        console.log('Initializing progress display');
-        updateTransferProgress(0);
-        elements.transferProgress.classList.remove('hidden');
+        let offset = 0;
+        let chunkIndex = 0;
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-        // Read and send file in chunks
-        console.log('Starting chunk transfer...');
+        // Read and send file chunks
         while (offset < file.size) {
-            console.log('Processing chunk:', {
-                index: chunkIndex,
-                offset,
-                remaining: file.size - offset
-            });
-
-            const chunk = await readFileChunk(file, offset, chunkSize);
+            const chunk = await readFileChunk(file, offset, CHUNK_SIZE);
+            console.log(`Sending chunk ${chunkIndex + 1}/${totalChunks}`);
             
-            // Store chunk if file is large
-            if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-                console.log('Storing large file chunk...');
-                await storageManager.storeFileChunk(fileId, chunkIndex, chunk);
-                console.log('Chunk stored successfully');
-            }
-            
-            console.log('Sending chunk to peer...');
             conn.send({
                 type: MESSAGE_TYPES.FILE_CHUNK,
                 fileId: fileId,
-                chunk: chunk,
-                offset: offset,
-                index: chunkIndex
+                chunkIndex: chunkIndex,
+                data: chunk
             });
-            console.log('Chunk sent successfully');
 
             offset += chunk.byteLength;
             chunkIndex++;
-            
-            const progress = Math.min(100, Math.round((offset / file.size) * 100));
-            console.log('Transfer progress:', progress + '%');
-            updateTransferProgress(progress);
-            updateTransferInfo(`Sending: ${progress}%`);
 
-            // Add a small delay between chunks to prevent overwhelming the connection
-            await new Promise(resolve => setTimeout(resolve, 10));
+            // Update progress
+            const progress = (offset / file.size) * 100;
+            updateTransferProgress(progress);
+            updateTransferInfo(`Sending ${file.name}: ${Math.round(progress)}%`);
         }
 
-        // Send file complete message
-        console.log('Sending file completion message...');
+        // Send completion message
+        console.log('Sending file completion message');
         conn.send({
             type: MESSAGE_TYPES.FILE_COMPLETE,
             fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            totalChunks: chunkIndex
+            fileName: file.name
         });
-        console.log('File completion message sent');
 
-        // Update UI on completion
-        console.log('Updating UI for completion...');
-        updateTransferProgress(100);
-        setTimeout(() => {
-            elements.transferProgress.classList.add('hidden');
-            updateTransferInfo('');
-        }, 1000);
-
-        // Cleanup stored chunks if necessary
-        if (file.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            console.log('Cleaning up stored chunks...');
-            await storageManager.cleanup(fileId);
-            console.log('Cleanup completed');
-        }
+        // Hide progress bar
+        elements.transferProgress.classList.add('hidden');
+        updateTransferInfo('');
 
         // Add to transfer history
-        console.log('Updating transfer history...');
+        console.log('Updating transfer history');
         const transfer = {
+            fileId: fileId,
             fileName: file.name,
-            fileType: file.type,
             fileSize: file.size,
+            fileType: file.type,
             timestamp: new Date().toISOString(),
             direction: 'sent',
             peerId: peerId
         };
-        
+
         if (!fileTransferHistory.has(peerId)) {
             fileTransferHistory.set(peerId, []);
         }
         fileTransferHistory.get(peerId).push(transfer);
+
+        // Update UI and broadcast history
+        console.log('Updating UI and broadcasting history');
         updateFileTransferUI();
         broadcastFileHistory();
-        console.log('Transfer history updated');
 
-        console.log('File transfer completed successfully:', {
+        // Forward file info to other peers
+        console.log('Forwarding file info to other peers');
+        await forwardFileInfoToPeers({
+            fileId: fileId,
             fileName: file.name,
-            peerId: peerId,
-            totalChunks: chunkIndex,
-            totalSize: file.size
-        });
+            fileSize: file.size,
+            fileType: file.type,
+            originalSender: peer.id
+        }, fileId);
+
+        console.log('File transfer completed successfully');
+        showNotification(`File ${file.name} sent successfully`, 'success');
         return true;
 
     } catch (error) {
@@ -2927,85 +2821,6 @@ async function sendFile(file, peerId) {
         showNotification(`Failed to send file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
         updateTransferInfo('');
-        throw error;
-    }
-}
-
-// Update handleFileChunk to use storage manager for large files
-async function handleFileChunk(data) {
-    try {
-        console.log('Processing file chunk:', {
-            fileId: data.fileId,
-            chunkIndex: data.chunkIndex,
-            chunkSize: data.data.byteLength
-        });
-
-        const fileData = fileChunks[data.fileId];
-        if (!fileData) {
-            console.error('No file data found for file ID:', data.fileId);
-            return;
-        }
-        console.log('File data found:', {
-            fileName: fileData.fileName,
-            totalSize: fileData.size,
-            receivedSize: fileData.receivedSize
-        });
-
-        // Store the chunk
-        if (fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE) {
-            console.log('Large file detected, storing chunk in storage manager...');
-            try {
-                await storageManager.storeFileChunk(data.fileId, data.chunkIndex, data.data);
-                fileData.receivedChunks.add(data.chunkIndex);
-                fileData.receivedSize += data.data.byteLength;
-                console.log('Chunk stored successfully:', {
-                    chunkIndex: data.chunkIndex,
-                    chunkSize: data.data.byteLength,
-                    totalReceived: fileData.receivedSize
-                });
-            } catch (error) {
-                console.error('Error storing chunk:', error);
-                throw error;
-            }
-        } else {
-            console.log('Small file, storing chunk in memory...');
-            fileData.chunks.push(data.data);
-            fileData.receivedSize += data.data.byteLength;
-            console.log('Chunk stored in memory:', {
-                chunkIndex: fileData.chunks.length - 1,
-                chunkSize: data.data.byteLength,
-                totalReceived: fileData.receivedSize
-            });
-        }
-
-        // Calculate and update progress
-        const progress = (fileData.receivedSize / fileData.size) * 100;
-        console.log('File transfer progress:', {
-            received: fileData.receivedSize,
-            total: fileData.size,
-            progress: progress.toFixed(2) + '%',
-            chunksReceived: fileData.size > STORAGE_CONFIG.MAX_MEMORY_FILE_SIZE ? 
-                fileData.receivedChunks.size : 
-                fileData.chunks.length
-        });
-
-        // Update progress bar (update every 1% change)
-        if (!fileData.lastProgressUpdate || progress - fileData.lastProgressUpdate >= 1) {
-            console.log('Updating progress bar:', progress.toFixed(2) + '%');
-            updateTransferProgress(progress);
-            fileData.lastProgressUpdate = progress;
-        }
-
-        // Update transfer info
-        const receivedMB = (fileData.receivedSize / 1024 / 1024).toFixed(2);
-        const totalMB = (fileData.size / 1024 / 1024).toFixed(2);
-        const transferInfo = `Receiving: ${fileData.fileName} (${receivedMB}MB / ${totalMB}MB)`;
-        console.log('Updating transfer info:', transferInfo);
-        updateTransferInfo(transferInfo);
-
-    } catch (error) {
-        console.error('Error handling file chunk:', error);
-        showNotification(`Error processing file chunk: ${error.message}`, 'error');
         throw error;
     }
 }

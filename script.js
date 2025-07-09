@@ -56,6 +56,21 @@ const elements = {
     cancelEditButton: document.getElementById('cancel-edit')
 };
 
+// Add notification system
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    
+    elements.notifications.appendChild(notification);
+    
+    // Remove notification after 5 seconds
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => notification.remove(), 500);
+    }, 5000);
+}
+
 // State
 let peer = null;
 let connections = new Map(); // Map to store multiple connections
@@ -66,6 +81,7 @@ let fileChunks = {}; // Initialize fileChunks object
 let keepAliveInterval = null;
 let connectionTimeouts = new Map();
 let isPageVisible = true;
+let storageManager = null; // Initialize storageManager
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -1075,34 +1091,36 @@ elements.connectButton.addEventListener('click', () => {
     }
 });
 
-// Update the initialization
-async function init() {
-    if (!checkBrowserSupport()) {
-        return;
-    }
+// Add notification system
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    
+    elements.notifications.appendChild(notification);
+    
+    // Remove notification after 5 seconds
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => notification.remove(), 500);
+    }, 5000);
+}
 
-    try {
-        await storageManager.init();
-        
-        // Remove any existing event listeners
-        elements.fileInput.removeEventListener('change', handleFileSelect);
-        elements.dropZone.removeEventListener('click', () => elements.fileInput.click());
-        
-        // Setup file input handler
-        elements.fileInput.addEventListener('change', handleFileSelect);
-        
-        // Setup drop zone click handler
-        elements.dropZone.addEventListener('click', () => elements.fileInput.click());
-        
-        // Initialize other components
-        initPeerJS();
-        loadRecentPeers();
-        checkUrlForPeerId();
-        initConnectionKeepAlive();
-        initPeerIdEditing();
-    } catch (error) {
-        console.error('Initialization error:', error);
-        showNotification('Failed to initialize storage system', 'error');
+// Add drag and drop event handlers if they don't exist
+function handleDragOver(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    elements.dropZone.classList.add('drag-over');
+}
+
+function handleDrop(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    elements.dropZone.classList.remove('drag-over');
+    
+    const files = event.dataTransfer.files;
+    if (files.length > 0) {
+        handleFileSelect({ target: { files } });
     }
 }
 
@@ -1668,8 +1686,6 @@ function initPeerIdEditing() {
     }
 }
 
-init();
-
 // Function to send file transfer history to a new peer
 function sendFileTransferHistory(conn) {
     const historyArray = Array.from(fileTransferHistory.entries());
@@ -1972,9 +1988,6 @@ class StorageManager {
         }
     }
 }
-
-// Initialize storage manager
-const storageManager = new StorageManager();
 
 // Update readFileChunk function to use storage manager
 async function readFileChunk(file, offset, length) {

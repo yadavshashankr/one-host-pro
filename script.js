@@ -3037,4 +3037,64 @@ async function init() {
                 break; // Success, exit the loop
             } catch (error) {
                 retryCount++;
-                console.error(`
+                console.error(`PeerJS initialization failed (attempt ${retryCount}/${maxRetries}):`, error);
+                if (retryCount === maxRetries) {
+                    throw new Error('Failed to initialize PeerJS after multiple attempts');
+                }
+                // Wait before retrying (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, retryCount)));
+            }
+        }
+
+        // Initialize event listeners and UI
+        console.log('Setting up event listeners...');
+        elements.fileInput.addEventListener('change', handleFileSelect);
+        elements.dropZone.addEventListener('dragover', handleDragOver);
+        elements.dropZone.addEventListener('drop', handleDrop);
+        elements.connectButton.addEventListener('click', () => {
+            const remotePeerId = elements.remotePeerId.value.trim();
+            if (remotePeerId) {
+                connectToPeer(remotePeerId);
+            }
+        });
+
+        // Initialize peer ID editing
+        console.log('Setting up peer ID editing...');
+        initPeerIdEditing();
+
+        // Initialize connection keep-alive
+        console.log('Setting up connection keep-alive...');
+        initConnectionKeepAlive();
+
+        // Initialize visibility change handlers
+        console.log('Setting up visibility change handlers...');
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('focus', handlePageFocus);
+        window.addEventListener('blur', handlePageBlur);
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        // Load recent peers
+        console.log('Loading recent peers...');
+        loadRecentPeers();
+
+        // Check URL for peer ID
+        console.log('Checking URL for peer ID...');
+        checkUrlForPeerId();
+
+        // Initialize share button
+        console.log('Setting up share button...');
+        initShareButton();
+
+        console.log('Initialization completed successfully');
+    } catch (error) {
+        console.error('Initialization failed:', error);
+        showNotification('Failed to initialize application', 'error');
+        updateConnectionStatus('error', 'Initialization failed');
+    }
+}
+
+// Start the application
+init().catch(error => {
+    console.error('Application startup failed:', error);
+    showNotification('Failed to start application', 'error');
+});

@@ -306,7 +306,7 @@ function setupPeerHandlers() {
         
         // Try to reconnect
         setTimeout(() => {
-            if (peer && peer.disconnected) {
+            if (peer && !peer.destroyed) {
                 console.log('Attempting to reconnect...');
                 peer.reconnect();
             }
@@ -335,62 +335,18 @@ function initPeerJS() {
         // Clear existing connections
         connections.clear();
 
-        // Create new peer with retries
-        const initPeerWithRetry = async (retryCount = 0) => {
-            try {
-                peer = new Peer({
-                    debug: 2,
-                    host: 'peerjs.shashankyadav.dev',  // Use a reliable PeerJS server
-                    secure: true,
-                    port: 443,
-                    config: {
-                        iceServers: [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:global.stun.twilio.com:3478' }
-                        ]
-                    },
-                    retry_delay: 1000,
-                    retries: 3
-                });
-
-                setupPeerHandlers();
-
-                // Wait for peer to be ready
-                await new Promise((resolve, reject) => {
-                    const timeout = setTimeout(() => {
-                        reject(new Error('Timeout waiting for peer to open'));
-                    }, 10000); // 10 second timeout
-
-                    peer.once('open', () => {
-                        clearTimeout(timeout);
-                        console.log('Peer connection established successfully');
-                        resolve();
-                    });
-
-                    peer.once('error', (err) => {
-                        clearTimeout(timeout);
-                        reject(err);
-                    });
-                });
-
-            } catch (error) {
-                console.error(`Peer initialization attempt ${retryCount + 1} failed:`, error);
-                
-                if (retryCount < 2) { // Try up to 3 times
-                    console.log(`Retrying peer initialization... (${retryCount + 2}/3)`);
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
-                    return initPeerWithRetry(retryCount + 1);
-                }
-                throw error;
+        // Create new peer with auto-generated ID
+        peer = new Peer({
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
             }
-        };
-
-        // Start the initialization process
-        initPeerWithRetry().catch(error => {
-            console.error('All peer initialization attempts failed:', error);
-            updateConnectionStatus('', 'Failed to initialize connection');
-            showNotification('Failed to initialize peer connection. Please refresh the page.', 'error');
         });
+
+        setupPeerHandlers();
 
     } catch (error) {
         console.error('PeerJS Initialization Error:', error);
@@ -1696,9 +1652,6 @@ async function saveEditedPeerId() {
         // Initialize new peer with custom ID
         peer = new Peer(newPeerId, {
             debug: 2,
-            host: 'peerjs.shashankyadav.dev',  // Use a reliable PeerJS server
-            secure: true,
-            port: 443,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },

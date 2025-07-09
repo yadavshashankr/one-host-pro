@@ -1241,6 +1241,11 @@ function handleDrop(event) {
         return;
     }
 
+    handleFiles(files);
+}
+
+// Add a common function to handle files from both drop and select
+function handleFiles(files) {
     if (connections.size === 0) {
         console.warn('No peers connected');
         showNotification('No peers connected. Please connect to a peer first.', 'error');
@@ -1259,19 +1264,24 @@ function handleDrop(event) {
 
     console.log('Active connections:', activeConnections.length);
 
-    // Process dropped files
+    // Process files
     Array.from(files).forEach(file => {
-        console.log('Adding dropped file to queue:', {
+        console.log('Adding file to queue:', {
             name: file.name,
             size: formatFileSize(file.size),
             type: file.type
         });
         
+        // Only add the file once per peer
+        const fileId = generateFileId(file);
         activeConnections.forEach(([peerId, conn]) => {
-            fileQueue.push({
-                file: file,
-                peerId: peerId
-            });
+            if (!fileQueue.some(item => item.fileId === fileId && item.peerId === peerId)) {
+                fileQueue.push({
+                    file: file,
+                    peerId: peerId,
+                    fileId: fileId
+                });
+            }
         });
     });
 
@@ -1280,7 +1290,7 @@ function handleDrop(event) {
     processFileQueue();
 }
 
-// Update the file selection handler
+// Update file selection handler to use common function
 function handleFileSelect(event) {
     const files = event.target.files;
     console.log('Files selected:', files?.length);
@@ -1290,45 +1300,7 @@ function handleFileSelect(event) {
         return;
     }
 
-    if (connections.size === 0) {
-        console.warn('No peers connected');
-        showNotification('No peers connected. Please connect to a peer first.', 'error');
-        event.target.value = ''; // Reset input
-        return;
-    }
-
-    // Get the currently connected peer(s)
-    const activeConnections = Array.from(connections.entries())
-        .filter(([_, conn]) => conn && conn.open);
-
-    if (activeConnections.length === 0) {
-        console.warn('No active peer connections found');
-        showNotification('No active peer connections found.', 'error');
-        event.target.value = ''; // Reset input
-        return;
-    }
-
-    console.log('Active connections:', activeConnections.length);
-
-    // Process each file
-    Array.from(files).forEach(file => {
-        console.log('Adding file to queue:', {
-            name: file.name,
-            size: formatFileSize(file.size),
-            type: file.type
-        });
-        
-        activeConnections.forEach(([peerId, conn]) => {
-            fileQueue.push({
-                file: file,
-                peerId: peerId
-            });
-        });
-    });
-
-    // Start processing the queue
-    console.log('Starting queue processing');
-    processFileQueue();
+    handleFiles(files);
     
     // Reset the input so the same file can be selected again
     event.target.value = '';
@@ -2138,7 +2110,17 @@ function updateFileTransferUI() {
     fileTransferHistory.forEach((transfers, peerId) => {
         console.log(`Processing history for peer ${peerId}`);
 
+        // Use Set to track unique file IDs
+        const processedFiles = new Set();
+
         transfers.forEach(transfer => {
+            // Skip if we've already processed this file
+            if (processedFiles.has(transfer.fileId)) {
+                console.log(`Skipping duplicate file: ${transfer.fileName}`);
+                return;
+            }
+            processedFiles.add(transfer.fileId);
+
             const li = document.createElement('li');
             li.className = 'file-item';
 
@@ -2166,19 +2148,23 @@ function updateFileTransferUI() {
                 console.log(`Creating download button for received file: ${transfer.fileName}`);
                 const downloadButton = document.createElement('button');
                 downloadButton.className = 'download-button';
-                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                downloadButton.textContent = 'Download';
                 downloadButton.title = 'Download file';
                 
                 downloadButton.addEventListener('click', async () => {
                     console.log(`Download button clicked for file: ${transfer.fileName}`);
                     try {
-                        const fileBlob = sentFileBlobs.get(transfer.fileId);
-                        if (!fileBlob) {
+                        // For received files, check the file chunks
+                        const fileData = fileChunks[transfer.fileId];
+                        if (!fileData) {
                             throw new Error('File data not found');
                         }
 
+                        // Combine chunks and create blob
+                        const blob = new Blob(fileData.chunks, { type: transfer.fileType });
+                        
                         // Create download link
-                        const url = URL.createObjectURL(fileBlob);
+                        const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
                         a.download = transfer.fileName;

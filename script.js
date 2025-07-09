@@ -243,20 +243,155 @@ async function shareId() {
     }
 }
 
+// Setup peer event handlers
+function setupPeerHandlers() {
+    if (!peer) {
+        console.error('Cannot setup handlers: peer is null');
+        return;
+    }
+
+    peer.on('open', (id) => {
+        console.log('Peer opened with ID:', id);
+        elements.peerId.textContent = id;
+        updateConnectionStatus('', 'Ready to connect');
+        generateQRCode(id);
+        initShareButton();
+        updateEditButtonState();
+    });
+
+    peer.on('connection', (conn) => {
+        console.log('Incoming connection from:', conn.peer);
+        connections.set(conn.peer, conn);
+        updateConnectionStatus('connecting', 'Incoming connection...');
+        setupConnectionHandlers(conn);
+    });
+
+    peer.on('error', (error) => {
+        console.error('PeerJS Error:', error);
+        let errorMessage = 'Connection error';
+        
+        // Handle specific error types
+        if (error.type === 'peer-unavailable') {
+            errorMessage = 'Peer is not available or does not exist';
+        } else if (error.type === 'network') {
+            errorMessage = 'Network connection error';
+        } else if (error.type === 'disconnected') {
+            errorMessage = 'Disconnected from server';
+        } else if (error.type === 'server-error') {
+            errorMessage = 'Server error occurred';
+        } else if (error.type === 'unavailable-id') {
+            errorMessage = 'This ID is already taken. Please try another one.';
+        } else if (error.type === 'browser-incompatible') {
+            errorMessage = 'Your browser might not support all required features';
+        } else if (error.type === 'invalid-id') {
+            errorMessage = 'Invalid ID format';
+        } else if (error.type === 'ssl-unavailable') {
+            errorMessage = 'SSL is required for this connection';
+        }
+        
+        updateConnectionStatus('', errorMessage);
+        showNotification(errorMessage, 'error');
+
+        // If this was during a custom ID setup, revert to auto-generated ID
+        if (elements.peerIdEdit && !elements.peerIdEdit.classList.contains('hidden')) {
+            cancelEditingPeerId();
+            initPeerJS(); // Reinitialize with auto-generated ID
+        }
+    });
+
+    peer.on('disconnected', () => {
+        console.log('Peer disconnected');
+        updateConnectionStatus('', 'Disconnected');
+        isConnectionReady = false;
+        
+        // Try to reconnect
+        setTimeout(() => {
+            if (peer && peer.disconnected) {
+                console.log('Attempting to reconnect...');
+                peer.reconnect();
+            }
+        }, 3000);
+    });
+
+    peer.on('close', () => {
+        console.log('Peer connection closed');
+        updateConnectionStatus('', 'Connection closed');
+        isConnectionReady = false;
+    });
+}
+
 // Initialize PeerJS
 function initPeerJS() {
     try {
-        peer = new Peer({
-            debug: 2,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
-                ]
+        console.log('Initializing PeerJS...');
+        
+        // Destroy existing peer if any
+        if (peer) {
+            console.log('Destroying existing peer connection');
+            peer.destroy();
+            peer = null;
+        }
+
+        // Clear existing connections
+        connections.clear();
+
+        // Create new peer with retries
+        const initPeerWithRetry = async (retryCount = 0) => {
+            try {
+                peer = new Peer({
+                    debug: 2,
+                    host: 'peerjs.shashankyadav.dev',  // Use a reliable PeerJS server
+                    secure: true,
+                    port: 443,
+                    config: {
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:global.stun.twilio.com:3478' }
+                        ]
+                    },
+                    retry_delay: 1000,
+                    retries: 3
+                });
+
+                setupPeerHandlers();
+
+                // Wait for peer to be ready
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Timeout waiting for peer to open'));
+                    }, 10000); // 10 second timeout
+
+                    peer.once('open', () => {
+                        clearTimeout(timeout);
+                        console.log('Peer connection established successfully');
+                        resolve();
+                    });
+
+                    peer.once('error', (err) => {
+                        clearTimeout(timeout);
+                        reject(err);
+                    });
+                });
+
+            } catch (error) {
+                console.error(`Peer initialization attempt ${retryCount + 1} failed:`, error);
+                
+                if (retryCount < 2) { // Try up to 3 times
+                    console.log(`Retrying peer initialization... (${retryCount + 2}/3)`);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+                    return initPeerWithRetry(retryCount + 1);
+                }
+                throw error;
             }
+        };
+
+        // Start the initialization process
+        initPeerWithRetry().catch(error => {
+            console.error('All peer initialization attempts failed:', error);
+            updateConnectionStatus('', 'Failed to initialize connection');
+            showNotification('Failed to initialize peer connection. Please refresh the page.', 'error');
         });
 
-        setupPeerHandlers();
     } catch (error) {
         console.error('PeerJS Initialization Error:', error);
         updateConnectionStatus('', 'Initialization failed');
@@ -1537,14 +1672,22 @@ async function saveEditedPeerId() {
         showNotification('Peer ID must be at least 3 characters', 'error');
         return;
     }
+
+    // Validate peer ID format
+    const validIdRegex = /^[A-Za-z0-9_-]+$/;
+    if (!validIdRegex.test(newPeerId)) {
+        showNotification('Peer ID can only contain letters, numbers, underscores, and hyphens', 'error');
+        return;
+    }
     
     try {
         // Show loading state
         updateConnectionStatus('connecting', 'Updating peer ID...');
         
-        // Disconnect current peer
+        // Destroy existing peer if any
         if (peer) {
             peer.destroy();
+            peer = null;
         }
         
         // Clear connections
@@ -1553,6 +1696,9 @@ async function saveEditedPeerId() {
         // Initialize new peer with custom ID
         peer = new Peer(newPeerId, {
             debug: 2,
+            host: 'peerjs.shashankyadav.dev',  // Use a reliable PeerJS server
+            secure: true,
+            port: 443,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
@@ -1567,7 +1713,7 @@ async function saveEditedPeerId() {
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error('Timeout waiting for peer to open'));
-            }, 5000);
+            }, 10000); // 10 second timeout
 
             peer.once('open', () => {
                 clearTimeout(timeout);

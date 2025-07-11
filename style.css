@@ -19,6 +19,8 @@
     --header-text: #ffffff;
     --sidebar-background: #ffffff;
     --search-background: #f6f6f6;
+    --input-text-color: #333;
+    --message-text-color: #333;
 }
 
 [data-theme="dark"] {
@@ -34,6 +36,8 @@
     --header-background: #202C33;
     --sidebar-background: #111B21;
     --search-background: #202C33;
+    --input-text-color: #ffffff;
+    --message-text-color: #ffffff;
 }
 
 * {
@@ -669,7 +673,7 @@ input[type="file"] {
     background: none;
     padding: 0 8px;
     width: 100%;
-    color: var(--text-color);
+    color: var(--input-text-color);
 }
 
 .search-input-wrapper .material-icons {
@@ -751,6 +755,7 @@ input[type="file"] {
     border-radius: 8px;
     position: relative;
     word-wrap: break-word;
+    color: var(--message-text-color);
 }
 
 .message.sent {
@@ -832,7 +837,7 @@ input[type="file"] {
     width: 100%;
     border: none;
     background: none;
-    color: var(--text-color);
+    color: var(--input-text-color);
 }
 
 /* Typing Indicator */

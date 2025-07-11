@@ -359,34 +359,53 @@ function setupPeerHandlers() {
 // Initialize PeerJS
 function initPeerJS() {
     try {
-        console.log('Initializing PeerJS...');
-        
-        // Destroy existing peer if any
-        if (peer) {
-            console.log('Destroying existing peer connection');
-            peer.destroy();
-            peer = null;
-        }
-
-        // Clear existing connections
-        connections.clear();
-
-        // Create new peer with auto-generated ID
-        peer = new Peer({
+        // Initialize the Peer object
+        peer = new Peer(undefined, {
+            host: 'peerjs.shashankyadav.dev',
+            port: 443,
+            path: '/',
+            secure: true,
             debug: 2,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
+                    { urls: 'stun:stun1.l.google.com:19302' }
                 ]
             }
         });
 
-        setupPeerHandlers();
+        peer.on('open', (id) => {
+            console.log('My peer ID is:', id);
+            if (elements.peerId) {
+                elements.peerId.textContent = id;
+                generateQRCode(id);
+            }
+            updateConnectionStatus('', 'Ready to connect');
+        });
+
+        peer.on('error', (error) => {
+            console.error('PeerJS error:', error);
+            showNotification('Connection error: ' + error.type, 'error');
+            
+            if (error.type === 'peer-unavailable') {
+                updateConnectionStatus('', 'Peer unavailable');
+            } else if (error.type === 'disconnected') {
+                updateConnectionStatus('', 'Disconnected');
+                resetConnection();
+            } else {
+                updateConnectionStatus('', 'Error occurred');
+            }
+        });
+
+        peer.on('connection', (conn) => {
+            console.log('Incoming connection from:', conn.peer);
+            connections.set(conn.peer, conn);
+            setupConnectionHandlers(conn);
+            addRecentPeer(conn.peer);
+        });
 
     } catch (error) {
-        console.error('PeerJS Initialization Error:', error);
-        updateConnectionStatus('', 'Initialization failed');
+        console.error('PeerJS initialization error:', error);
         showNotification('Failed to initialize peer connection', 'error');
     }
 }
@@ -1979,47 +1998,61 @@ function initTheme() {
 
 // Event Listeners
 function initChatEventListeners() {
-    elements.messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
+    // Only add event listeners if elements exist
+    if (elements.messageInput) {
+        elements.messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const activePeer = getActivePeer();
+                if (activePeer) {
+                    sendTextMessage(elements.messageInput.value, activePeer);
+                }
+            }
+        });
+
+        elements.messageInput.addEventListener('input', () => {
+            const activePeer = getActivePeer();
+            if (activePeer) {
+                sendTypingIndicator(activePeer);
+            }
+        });
+    }
+
+    if (elements.sendMessage) {
+        elements.sendMessage.addEventListener('click', () => {
             const activePeer = getActivePeer();
             if (activePeer) {
                 sendTextMessage(elements.messageInput.value, activePeer);
             }
-        }
-    });
+        });
+    }
 
-    elements.messageInput.addEventListener('input', () => {
-        const activePeer = getActivePeer();
-        if (activePeer) {
-            sendTypingIndicator(activePeer);
-        }
-    });
+    if (elements.attachFile) {
+        elements.attachFile.addEventListener('click', () => {
+            elements.fileInput.click();
+        });
+    }
 
-    elements.sendMessage.addEventListener('click', () => {
-        const activePeer = getActivePeer();
-        if (activePeer) {
-            sendTextMessage(elements.messageInput.value, activePeer);
-        }
-    });
+    if (elements.contextMenu) {
+        elements.contextMenu.addEventListener('click', (e) => {
+            const action = e.target.closest('li')?.dataset.action;
+            const messageId = elements.contextMenu.dataset.messageId;
+            if (action && messageId) {
+                handleContextMenuAction(action, messageId);
+            }
+            hideMessageContextMenu();
+        });
+    }
 
-    elements.attachFile.addEventListener('click', () => {
-        elements.fileInput.click();
-    });
+    if (elements.qrCodeToggle) {
+        elements.qrCodeToggle.addEventListener('click', () => {
+            elements.qrcode.parentElement.classList.toggle('hidden');
+        });
+    }
 
-    elements.contextMenu.addEventListener('click', (e) => {
-        const action = e.target.closest('li')?.dataset.action;
-        const messageId = elements.contextMenu.dataset.messageId;
-        if (action && messageId) {
-            handleContextMenuAction(action, messageId);
-        }
-        hideMessageContextMenu();
-    });
-
-    // QR Code toggle
-    elements.qrCodeToggle.addEventListener('click', () => {
-        elements.qrcode.parentElement.classList.toggle('hidden');
-    });
+    if (elements.themeToggle) {
+        elements.themeToggle.addEventListener('click', toggleTheme);
+    }
 }
 
 function handleContextMenuAction(action, messageId) {
@@ -2054,6 +2087,11 @@ function getActivePeer() {
 
 // Initialize chat
 function initChat() {
+    if (!elements.messageInput || !elements.sendMessage) {
+        console.warn('Chat elements not found, skipping chat initialization');
+        return;
+    }
+
     initChatEventListeners();
     initTheme();
 }

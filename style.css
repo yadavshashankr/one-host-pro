@@ -563,21 +563,27 @@ input[type="file"] {
 
 /* Peer ID editing styles */
 .peer-id-display {
+    flex: 1;
     display: flex;
     align-items: center;
-    flex: 1;
+    gap: 8px;
+    color: var(--header-text);
+}
+
+#peer-id {
+    font-family: monospace;
+    word-break: break-all;
+    color: var(--header-text);
 }
 
 .peer-id-edit {
-    font-size: 1rem;
-    padding: 4px 8px;
-    border: 2px solid var(--primary-color);
-    border-radius: 4px;
-    background: var(--background-color);
-    color: var(--text-color);
     width: 100%;
-    max-width: 200px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
     font-family: monospace;
+    color: var(--input-text-color);
+    background-color: var(--card-background);
 }
 
 .peer-id-edit.hidden {

@@ -42,34 +42,24 @@ const MESSAGE_STATUS = {
 // DOM Elements
 const elements = {
     peerId: document.getElementById('peer-id'),
-    copyId: document.getElementById('copy-id'),
     shareId: document.getElementById('share-id'),
-    remotePeerId: document.getElementById('remote-peer-id'),
-    connectButton: document.getElementById('connect-button'),
+    peerSearch: document.getElementById('peer-search'),
     fileInput: document.getElementById('file-input'),
-    dropZone: document.getElementById('drop-zone'),
     transferProgress: document.getElementById('transfer-progress'),
     progress: document.getElementById('progress'),
     transferInfo: document.getElementById('transfer-info'),
-    fileList: document.getElementById('file-list'),
     statusText: document.getElementById('status-text'),
     statusDot: document.getElementById('status-dot'),
     browserSupport: document.getElementById('browser-support'),
-    fileTransferSection: document.getElementById('file-transfer-section'),
     qrcode: document.getElementById('qrcode'),
-    receivedFiles: document.getElementById('received-files'),
     notifications: document.getElementById('notifications'),
-    sentFilesList: document.getElementById('sent-files-list'),
-    receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
     recentPeersList: document.getElementById('recent-peers-list'),
     clearPeers: document.getElementById('clear-peers'),
-    // Add new elements for peer ID editing
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
     cancelEditButton: document.getElementById('cancel-edit'),
-    // New elements for chat
     welcomeScreen: document.getElementById('welcome-screen'),
     activeChat: document.getElementById('active-chat'),
     messageList: document.getElementById('message-list'),
@@ -161,9 +151,9 @@ function updateRecentPeersList() {
         li.appendChild(icon);
         li.appendChild(document.createTextNode(peerId));
         li.onclick = () => {
-            elements.remotePeerId.value = peerId;
+            elements.peerSearch.value = peerId;
             elements.recentPeers.classList.add('hidden');
-            elements.connectButton.click();
+            connectToPeer(peerId);
         };
         elements.recentPeersList.appendChild(li);
     });
@@ -239,10 +229,10 @@ function checkUrlForPeerId() {
         const peerId = urlParams.get('peer');
         
         if (peerId && peerId.length > 0) {
-            elements.remotePeerId.value = peerId;
+            elements.peerSearch.value = peerId;
             // Wait a bit for PeerJS to initialize
             setTimeout(() => {
-                elements.connectButton.click();
+                connectToPeer(peerId);
             }, 1500);
         }
     } catch (error) {
@@ -1144,94 +1134,99 @@ function resetConnection() {
 }
 
 // Event Listeners
-elements.copyId.addEventListener('click', () => {
-    navigator.clipboard.writeText(elements.peerId.textContent)
-        .then(() => showNotification('Peer ID copied to clipboard'))
-        .catch(err => showNotification('Failed to copy Peer ID', 'error'));
-});
+function initEventListeners() {
+    // Share ID button
+    if (elements.shareId) {
+        elements.shareId.addEventListener('click', shareId);
+    }
 
-elements.connectButton.addEventListener('click', () => {
-    const remotePeerIdValue = elements.remotePeerId.value.trim();
-    if (!remotePeerIdValue) {
+    // Peer search/connect
+    if (elements.peerSearch) {
+        elements.peerSearch.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const remotePeerId = elements.peerSearch.value.trim();
+                if (remotePeerId) {
+                    connectToPeer(remotePeerId);
+                }
+            }
+        });
+    }
+
+    // File input
+    if (elements.fileInput) {
+        elements.fileInput.addEventListener('change', (e) => {
+            if (connections.size > 0) {
+                const files = e.target.files;
+                if (files.length > 0) {
+                    if (files.length > 1) {
+                        showNotification(`Processing ${files.length} files`, 'info');
+                    }
+                    Array.from(files).forEach(file => {
+                        fileQueue.push(file);
+                    });
+                    processFileQueue();
+                }
+                e.target.value = '';
+            } else {
+                showNotification('Please connect to at least one peer first', 'error');
+            }
+        });
+    }
+
+    // Clear peers
+    if (elements.clearPeers) {
+        elements.clearPeers.addEventListener('click', () => {
+            recentPeers = [];
+            saveRecentPeers();
+            updateRecentPeersList();
+        });
+    }
+
+    // Theme toggle
+    if (elements.themeToggle) {
+        elements.themeToggle.addEventListener('click', toggleTheme);
+    }
+
+    // QR code toggle
+    if (elements.qrCodeToggle) {
+        elements.qrCodeToggle.addEventListener('click', () => {
+            const container = elements.qrcode.parentElement;
+            if (container) {
+                container.classList.toggle('hidden');
+            }
+        });
+    }
+
+    // Initialize chat event listeners
+    initChatEventListeners();
+}
+
+// Connect to peer function
+function connectToPeer(remotePeerId) {
+    if (!remotePeerId) {
         showNotification('Please enter a Peer ID', 'error');
         return;
     }
 
-    if (connections.has(remotePeerIdValue)) {
+    if (connections.has(remotePeerId)) {
         showNotification('Already connected to this peer', 'warning');
         return;
     }
 
     try {
-        console.log('Attempting to connect to:', remotePeerIdValue);
+        console.log('Attempting to connect to:', remotePeerId);
         updateConnectionStatus('connecting', 'Connecting...');
-        const newConnection = peer.connect(remotePeerIdValue, {
+        const newConnection = peer.connect(remotePeerId, {
             reliable: true
         });
-        connections.set(remotePeerIdValue, newConnection);
+        connections.set(remotePeerId, newConnection);
         setupConnectionHandlers(newConnection);
     } catch (error) {
         console.error('Connection attempt error:', error);
         showNotification('Failed to establish connection', 'error');
         updateConnectionStatus('', 'Connection failed');
     }
-});
-
-elements.dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    elements.dropZone.classList.add('drag-over');
-});
-
-elements.dropZone.addEventListener('dragleave', () => {
-    elements.dropZone.classList.remove('drag-over');
-});
-
-elements.dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    elements.dropZone.classList.remove('drag-over');
-    
-    if (connections.size > 0) {
-        const files = e.dataTransfer.files;
-        if (files.length > 1) {
-            showNotification(`Processing ${files.length} files`, 'info');
-        }
-        Array.from(files).forEach(file => {
-            fileQueue.push(file);
-        });
-        processFileQueue();
-    } else {
-        showNotification('Please connect to at least one peer first', 'error');
-    }
-});
-
-// Add click handler for the drop zone
-elements.dropZone.addEventListener('click', () => {
-    if (connections.size > 0) {
-        elements.fileInput.click();
-    } else {
-        showNotification('Please connect to at least one peer first', 'error');
-    }
-});
-
-// Update file input change handler
-elements.fileInput.addEventListener('change', (e) => {
-    if (connections.size > 0) {
-        const files = e.target.files;
-        if (files.length > 0) {
-            if (files.length > 1) {
-                showNotification(`Processing ${files.length} files`, 'info');
-            }
-            Array.from(files).forEach(file => {
-                fileQueue.push(file);
-            });
-            processFileQueue();
-        }
-        // Reset the input so the same file can be selected again
-        e.target.value = '';
-    } else {
-        showNotification('Please connect to at least one peer first', 'error');
-    }
-});
+}
 
 // Initialize the application
 function init() {
@@ -1242,10 +1237,11 @@ function init() {
     initPeerJS();
     initIndexedDB();
     loadRecentPeers();
-    checkUrlForPeerId(); // Check URL for peer ID on load
-    initConnectionKeepAlive(); // Initialize connection keep-alive system
-    initPeerIdEditing(); // Initialize peer ID editing
-    initChat(); // Initialize chat functionality
+    checkUrlForPeerId();
+    initConnectionKeepAlive();
+    initPeerIdEditing();
+    initEventListeners();
+    initChat();
 }
 
 // Add CSS classes for notification styling

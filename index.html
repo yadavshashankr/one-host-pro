@@ -72,6 +72,9 @@
     <div class="chat-container">
       <!-- Conversation List Sidebar -->
       <div class="conversation-list">
+        <button class="hamburger-menu" title="Toggle Sidebar">
+            <span class="material-icons">menu</span>
+        </button>
         <div class="sidebar-header">
           <div class="user-info">
             <div class="avatar">
@@ -179,16 +182,22 @@
             <span>Typing...</span>
           </div>
 
+          <!-- Message Input Area -->
           <div class="message-input-container">
-            <button class="icon-button" id="emoji-button" title="Emoji">
-              <span class="material-icons">sentiment_satisfied_alt</span>
-            </button>
-            <div class="message-input-wrapper">
-              <input type="text" id="message-input" placeholder="Type a message">
-            </div>
-            <button class="icon-button" id="send-message" title="Send">
-              <span class="material-icons">send</span>
-            </button>
+              <div class="message-actions">
+                  <button class="icon-button" id="emoji-button" title="Emoji">
+                      <span class="material-icons">sentiment_satisfied_alt</span>
+                  </button>
+                  <button class="icon-button" id="attach-file" title="Attach File">
+                      <span class="material-icons">attach_file</span>
+                  </button>
+              </div>
+              <div class="message-input-wrapper">
+                  <input type="text" id="message-input" placeholder="Type a message">
+                  <button class="icon-button" id="send-message" title="Send">
+                      <span class="material-icons">send</span>
+                  </button>
+              </div>
           </div>
         </div>
 

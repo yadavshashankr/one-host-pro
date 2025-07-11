@@ -378,7 +378,7 @@ function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
         isConnectionReady = true;
-        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+        updateConnectionStatus('connected', conn.peer);
         
         // Show active chat and hide welcome screen
         if (elements.welcomeScreen) {
@@ -386,6 +386,8 @@ function setupConnectionHandlers(conn) {
         }
         if (elements.activeChat) {
             elements.activeChat.classList.remove('hidden');
+            // Collapse the sidebar
+            document.querySelector('.conversation-list').classList.add('collapsed');
         }
         
         addRecentPeer(conn.peer);
@@ -401,21 +403,22 @@ function setupConnectionHandlers(conn) {
         console.log('Received data:', data);
         try {
             if (data.type === MESSAGE_TYPES.TEXT_MESSAGE) {
+                // Add message to chat
                 addMessageToChat(data, false);
-            } else if (data.type === MESSAGE_TYPES.TYPING_INDICATOR) {
-                handleTypingIndicator(data);
-            } else if (data.type === MESSAGE_TYPES.CONNECTION_NOTIFICATION) {
-                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-                // Show active chat and hide welcome screen
-                if (elements.welcomeScreen) {
-                    elements.welcomeScreen.classList.add('hidden');
-                }
-                if (elements.activeChat) {
-                    elements.activeChat.classList.remove('hidden');
-                }
+                // Store message
+                await storeMessage(data);
+                // Send delivery receipt
+                conn.send({
+                    type: MESSAGE_TYPES.MESSAGE_STATUS,
+                    messageId: data.id,
+                    status: MESSAGE_STATUS.DELIVERED
+                });
+            } else if (data.type === MESSAGE_TYPES.FILE_INFO) {
+                addMessageToChat(data, false);
+                await storeMessage(data);
             }
         } catch (error) {
-            console.error('Error handling data:', error);
+            console.error('Error handling message:', error);
         }
     });
 
@@ -841,74 +844,51 @@ async function processFileQueue() {
     updateTransferInfo('');
 }
 
-// Modify sendFile function to work with queue
+// Send file function
 async function sendFile(file) {
-    if (connections.size === 0) {
-        showNotification('Please connect to at least one peer first', 'error');
-        return;
+    if (!file) {
+        throw new Error('No file selected');
     }
 
-    if (transferInProgress) {
-        // Add to queue instead of showing warning
-        fileQueue.push(file);
-        showNotification(`${file.name} added to queue`, 'info');
-        return;
-    }
+    const fileInfo = {
+        id: generateFileId(file),
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        sender: peer.id
+    };
 
-    try {
-        transferInProgress = true;
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
-        updateTransferInfo(`Sending ${file.name}...`);
+    // Send file info to all connected peers
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open) {
+            try {
+                // Send file info
+                conn.send({
+                    type: MESSAGE_TYPES.FILE_INFO,
+                    ...fileInfo
+                });
 
-        // Generate a unique file ID that will be same for all recipients
-        const fileId = generateFileId(file);
-        
-        // Create file blob once for the sender
-        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
-        
-        // Add to sender's history first
-        const fileInfo = {
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            id: fileId,
-            blob: fileBlob,
-            sharedBy: peer.id
-        };
-        addFileToHistory(fileInfo, 'sent');
+                // Create file message
+                const message = {
+                    id: generateMessageId(),
+                    type: MESSAGE_TYPES.FILE_INFO,
+                    content: fileInfo,
+                    sender: peer.id,
+                    receiver: peerId,
+                    timestamp: Date.now(),
+                    status: MESSAGE_STATUS.SENT
+                };
 
-        // Send to all connected peers
-        const sendPromises = [];
-        let successCount = 0;
-        const errors = [];
+                // Add message to chat
+                addMessageToChat(message, true);
 
-        for (const [peerId, conn] of connections) {
-            if (conn && conn.open) {
-                try {
-                    await sendFileToPeer(file, conn, fileId, fileBlob);
-                    successCount++;
-                } catch (error) {
-                    errors.push(error.message);
-                }
+                // Store message
+                await storeMessage(message);
+            } catch (error) {
+                console.error('Error sending file to peer:', error);
+                throw new Error(`Failed to send ${file.name} to peer ${peerId}`);
             }
         }
-
-        if (successCount > 0) {
-            showNotification(`${file.name} sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
-        } else {
-            throw new Error('Failed to send file to any peers: ' + errors.join(', '));
-        }
-    } catch (error) {
-        console.error('File send error:', error);
-        showNotification(error.message, 'error');
-        throw error; // Propagate error for queue processing
-    } finally {
-        transferInProgress = false;
-        elements.transferProgress.classList.add('hidden');
-        updateProgress(0);
-        // Process next file in queue if any
-        processFileQueue();
     }
 }
 
@@ -1025,21 +1005,34 @@ function initEventListeners() {
 
     // File input
     if (elements.fileInput) {
-        elements.fileInput.addEventListener('change', (e) => {
+        elements.fileInput.addEventListener('change', async (e) => {
             if (connections.size > 0) {
                 const files = e.target.files;
                 if (files.length > 0) {
-                    if (files.length > 1) {
-                        showNotification(`Processing ${files.length} files`, 'info');
+                    try {
+                        for (const file of files) {
+                            await sendFile(file);
+                        }
+                    } catch (error) {
+                        console.error('Error sending file:', error);
+                        showNotification(`Failed to send file: ${error.message}`, 'error');
                     }
-                    Array.from(files).forEach(file => {
-                        fileQueue.push(file);
-                    });
-                    processFileQueue();
                 }
+                // Clear the input
                 e.target.value = '';
             } else {
-                showNotification('Please connect to at least one peer first', 'error');
+                showNotification('Please connect to a peer first', 'error');
+            }
+        });
+    }
+
+    // Attach file button
+    if (elements.attachFile) {
+        elements.attachFile.addEventListener('click', () => {
+            if (connections.size > 0) {
+                elements.fileInput.click();
+            } else {
+                showNotification('Please connect to a peer first', 'error');
             }
         });
     }
@@ -1707,9 +1700,8 @@ function initPeerIdEditing() {
 async function sendTextMessage(text, peerId) {
     if (!text.trim()) return;
     
-    const messageId = generateMessageId();
     const message = {
-        id: messageId,
+        id: generateMessageId(),
         type: MESSAGE_TYPES.TEXT_MESSAGE,
         content: text,
         sender: peer.id,
@@ -1718,18 +1710,24 @@ async function sendTextMessage(text, peerId) {
         status: MESSAGE_STATUS.SENT
     };
 
-    // Store message locally
-    await storeMessage(message);
-
     // Send to peer
     const conn = connections.get(peerId);
     if (conn && conn.open) {
-        conn.send(message);
-        addMessageToChat(message, true);
+        try {
+            conn.send(message);
+            // Add message to chat
+            addMessageToChat(message, true);
+            // Store message
+            await storeMessage(message);
+            // Clear input
+            elements.messageInput.value = '';
+        } catch (error) {
+            console.error('Error sending message:', error);
+            showNotification('Failed to send message', 'error');
+        }
+    } else {
+        showNotification('Connection lost. Please reconnect.', 'error');
     }
-
-    // Clear input
-    elements.messageInput.value = '';
 }
 
 function generateMessageId() {
@@ -1781,23 +1779,22 @@ function addMessageToChat(message, isSent) {
     if (message.type === MESSAGE_TYPES.TEXT_MESSAGE) {
         content = `<div class="message-content">${escapeHtml(message.content)}</div>`;
     } else if (message.type === MESSAGE_TYPES.FILE_INFO) {
-        content = createFileMessageContent(message);
+        content = createFileMessageContent(message.content);
     }
 
     const time = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const status = isSent ? createMessageStatus(message.status) : '';
-
+    
     messageElement.innerHTML = `
         ${content}
         <div class="message-footer">
             <span class="message-time">${time}</span>
-            ${status}
         </div>
     `;
 
-    messageElement.addEventListener('contextmenu', showMessageContextMenu);
-    elements.messageList.appendChild(messageElement);
-    elements.messageList.scrollTop = elements.messageList.scrollHeight;
+    if (elements.messageList) {
+        elements.messageList.appendChild(messageElement);
+        elements.messageList.scrollTop = elements.messageList.scrollHeight;
+    }
 }
 
 function createFileMessageContent(fileInfo) {
@@ -1891,7 +1888,6 @@ function initTheme() {
 
 // Event Listeners
 function initChatEventListeners() {
-    // Only add event listeners if elements exist
     if (elements.messageInput) {
         elements.messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1899,6 +1895,8 @@ function initChatEventListeners() {
                 const activePeer = getActivePeer();
                 if (activePeer) {
                     sendTextMessage(elements.messageInput.value, activePeer);
+                } else {
+                    showNotification('No active peer connection', 'error');
                 }
             }
         });
@@ -1916,6 +1914,8 @@ function initChatEventListeners() {
             const activePeer = getActivePeer();
             if (activePeer) {
                 sendTextMessage(elements.messageInput.value, activePeer);
+            } else {
+                showNotification('No active peer connection', 'error');
             }
         });
     }
@@ -1973,9 +1973,13 @@ function handleContextMenuAction(action, messageId) {
 }
 
 function getActivePeer() {
-    // Get the currently active peer from the UI
-    const activeChatHeader = document.querySelector('.chat-header .peer-name');
-    return activeChatHeader ? activeChatHeader.dataset.peerId : null;
+    // Return the first connected peer
+    for (const [peerId, conn] of connections) {
+        if (conn && conn.open) {
+            return peerId;
+        }
+    }
+    return null;
 }
 
 // Initialize chat

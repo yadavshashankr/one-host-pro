@@ -697,6 +697,8 @@ input[type="file"] {
     display: flex;
     flex-direction: column;
     background-color: var(--chat-background);
+    position: relative;
+    height: 100vh;
 }
 
 .welcome-screen {
@@ -757,6 +759,7 @@ input[type="file"] {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    margin-bottom: 60px; /* Space for the input area */
 }
 
 .message {
@@ -834,6 +837,11 @@ input[type="file"] {
     display: flex;
     align-items: center;
     gap: 8px;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-top: 1px solid var(--border-color);
 }
 
 .message-input-wrapper {
@@ -938,4 +946,16 @@ emoji-picker {
     .conversation-list.hidden {
         display: none;
     }
+}
+
+/* Add collapsed sidebar style */
+.conversation-list.collapsed {
+    width: 60px;
+    transition: width 0.3s ease;
+}
+
+.conversation-list.collapsed .peer-id-container,
+.conversation-list.collapsed .search-container,
+.conversation-list.collapsed .conversations {
+    display: none;
 }

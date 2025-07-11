@@ -72,9 +72,6 @@
     <div class="chat-container">
       <!-- Conversation List Sidebar -->
       <div class="conversation-list">
-        <button class="hamburger-menu" title="Toggle Sidebar">
-            <span class="material-icons">menu</span>
-        </button>
         <div class="sidebar-header">
           <div class="user-info">
             <div class="avatar">
@@ -149,59 +146,50 @@
 
         <!-- Active Chat Interface -->
         <div id="active-chat" class="hidden">
-            <div class="chat-header">
-                <button class="hamburger-menu" title="Toggle Sidebar">
-                    <span class="material-icons">menu</span>
-                </button>
-                <div class="chat-peer-info">
-                    <div class="avatar">
-                        <span class="material-icons">account_circle</span>
-                    </div>
-                    <div class="peer-details">
-                        <div class="peer-name"></div>
-                        <div class="peer-status">
-                            <div class="status-indicator">
-                                <div id="status-dot" class="status-dot"></div>
-                                <span id="status-text">Offline</span>
-                            </div>
-                        </div>
-                    </div>
+          <div class="chat-header">
+            <div class="chat-peer-info">
+              <div class="avatar">
+                <span class="material-icons">account_circle</span>
+              </div>
+              <div class="peer-details">
+                <div class="peer-name"></div>
+                <div class="peer-status">
+                  <div class="status-indicator">
+                    <div id="status-dot" class="status-dot"></div>
+                    <span id="status-text">Offline</span>
+                  </div>
                 </div>
-                <div class="chat-actions">
-                    <button class="icon-button" id="attach-file" title="Attach File">
-                        <span class="material-icons">attach_file</span>
-                    </button>
-                    <button class="icon-button" id="chat-menu" title="Menu">
-                        <span class="material-icons">more_vert</span>
-                    </button>
-                </div>
+              </div>
             </div>
+            <div class="chat-actions">
+              <button class="icon-button" id="attach-file" title="Attach File">
+                <span class="material-icons">attach_file</span>
+              </button>
+              <button class="icon-button" id="chat-menu" title="Menu">
+                <span class="material-icons">more_vert</span>
+              </button>
+            </div>
+          </div>
 
-            <div class="message-list" id="message-list">
-                <!-- Messages will be inserted here -->
-            </div>
+          <div class="message-list" id="message-list">
+            <!-- Messages will be inserted here -->
+          </div>
 
-            <div id="typing-indicator" class="typing-indicator hidden">
-                <span>Typing...</span>
-            </div>
+          <div id="typing-indicator" class="typing-indicator hidden">
+            <span>Typing...</span>
+          </div>
 
-            <!-- Message Input Area -->
-            <div class="message-input-container">
-                <div class="message-actions">
-                    <button class="icon-button" id="emoji-button" title="Emoji">
-                        <span class="material-icons">sentiment_satisfied_alt</span>
-                    </button>
-                    <button class="icon-button" id="attach-file" title="Attach File">
-                        <span class="material-icons">attach_file</span>
-                    </button>
-                </div>
-                <div class="message-input-wrapper">
-                    <input type="text" id="message-input" placeholder="Type a message">
-                    <button class="icon-button" id="send-message" title="Send">
-                        <span class="material-icons">send</span>
-                    </button>
-                </div>
+          <div class="message-input-container">
+            <button class="icon-button" id="emoji-button" title="Emoji">
+              <span class="material-icons">sentiment_satisfied_alt</span>
+            </button>
+            <div class="message-input-wrapper">
+              <input type="text" id="message-input" placeholder="Type a message">
             </div>
+            <button class="icon-button" id="send-message" title="Send">
+              <span class="material-icons">send</span>
+            </button>
+          </div>
         </div>
 
         <!-- File Transfer Progress -->

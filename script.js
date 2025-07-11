@@ -1390,25 +1390,29 @@ function getFileIcon(mimeType) {
 }
 
 // Add event listeners for recent peers
-elements.remotePeerId.addEventListener('focus', () => {
-    if (recentPeers.length > 0) {
-        elements.recentPeers.classList.remove('hidden');
-    }
-});
+if (elements.peerSearch) {
+    elements.peerSearch.addEventListener('focus', () => {
+        if (recentPeers.length > 0) {
+            elements.recentPeers.classList.remove('hidden');
+        }
+    });
 
-elements.remotePeerId.addEventListener('blur', (e) => {
-    // Delay hiding to allow for click events on the list
-    setTimeout(() => {
+    elements.peerSearch.addEventListener('blur', (e) => {
+        // Delay hiding to allow for click events on the list
+        setTimeout(() => {
+            elements.recentPeers.classList.add('hidden');
+        }, 200);
+    });
+}
+
+if (elements.clearPeers) {
+    elements.clearPeers.addEventListener('click', () => {
+        recentPeers = [];
+        saveRecentPeers();
+        updateRecentPeersList();
         elements.recentPeers.classList.add('hidden');
-    }, 200);
-});
-
-elements.clearPeers.addEventListener('click', () => {
-    recentPeers = [];
-    saveRecentPeers();
-    updateRecentPeersList();
-    elements.recentPeers.classList.add('hidden');
-});
+    });
+}
 
 // Initialize connection keep-alive system
 function initConnectionKeepAlive() {

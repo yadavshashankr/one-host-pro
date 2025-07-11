@@ -1104,52 +1104,23 @@ function initEventListeners() {
     });
 }
 
-// Connect to peer function
-function connectToPeer(remotePeerId) {
-    if (!remotePeerId) {
-        showNotification('Please enter a Peer ID', 'error');
-        return;
-    }
-
-    if (remotePeerId === peer.id) {
-        showNotification('Cannot connect to yourself', 'error');
-        return;
-    }
-
-    if (connections.has(remotePeerId)) {
-        showNotification('Already connected to this peer', 'warning');
-        return;
-    }
-
-    try {
-        console.log('Attempting to connect to:', remotePeerId);
-        updateConnectionStatus('connecting', 'Connecting...');
-        
-        const conn = peer.connect(remotePeerId, {
-            reliable: true
-        });
-
-        if (!conn) {
-            throw new Error('Failed to create connection');
+// Add function to handle message container width
+function adjustMessageContainerWidth() {
+    const sidebar = document.querySelector('.conversation-list');
+    const messageContainer = document.querySelector('.message-input-container');
+    const chatWindow = document.querySelector('.chat-window');
+    
+    if (sidebar && messageContainer && chatWindow) {
+        if (window.innerWidth <= 768) {
+            // Mobile view
+            messageContainer.style.width = '100%';
+            messageContainer.style.left = '0';
+        } else {
+            // Desktop view
+            const sidebarWidth = sidebar.classList.contains('collapsed') ? 0 : 350;
+            messageContainer.style.width = `calc(100% - ${sidebarWidth}px)`;
+            messageContainer.style.left = `${sidebarWidth}px`;
         }
-
-        connections.set(remotePeerId, conn);
-        setupConnectionHandlers(conn);
-        
-        // Set a timeout for the connection attempt
-        setTimeout(() => {
-            if (!conn.open) {
-                connections.delete(remotePeerId);
-                updateConnectionStatus('', 'Connection timed out');
-                showNotification('Connection attempt timed out', 'error');
-            }
-        }, 10000); // 10 second timeout
-
-    } catch (error) {
-        console.error('Connection attempt error:', error);
-        showNotification(`Failed to connect: ${error.message}`, 'error');
-        updateConnectionStatus('', 'Connection failed');
-        connections.delete(remotePeerId);
     }
 }
 

@@ -567,13 +567,13 @@ input[type="file"] {
     display: flex;
     align-items: center;
     gap: 8px;
-    color: var(--header-text);
+    color: #000000;
 }
 
 #peer-id {
     font-family: monospace;
     word-break: break-all;
-    color: var(--header-text);
+    color: #000000;
 }
 
 #peer-id.generating {

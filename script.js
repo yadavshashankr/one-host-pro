@@ -356,6 +356,9 @@ async function initPeerJS() {
 
         // Initialize the Peer object
         peer = new Peer({
+            host: 'peerjs.shashankyadev.dev',
+            port: 443,
+            path: '/',
             secure: true,
             debug: 2,
             config: {
@@ -366,36 +369,7 @@ async function initPeerJS() {
             }
         });
 
-        peer.on('open', (id) => {
-            console.log('My peer ID is:', id);
-            if (elements.peerId) {
-                elements.peerId.textContent = id;
-                elements.peerId.classList.remove('generating');
-                generateQRCode(id);
-            }
-            updateConnectionStatus('', 'Ready to connect');
-        });
-
-        peer.on('error', (error) => {
-            console.error('PeerJS error:', error);
-            showNotification('Connection error: ' + error.type, 'error');
-            
-            if (error.type === 'peer-unavailable') {
-                updateConnectionStatus('', 'Peer unavailable');
-            } else if (error.type === 'disconnected') {
-                updateConnectionStatus('', 'Disconnected');
-                resetConnection();
-            } else {
-                updateConnectionStatus('', 'Error occurred');
-            }
-        });
-
-        peer.on('connection', (conn) => {
-            console.log('Incoming connection from:', conn.peer);
-            connections.set(conn.peer, conn);
-            setupConnectionHandlers(conn);
-            addRecentPeer(conn.peer);
-        });
+        setupPeerHandlers();
 
     } catch (error) {
         console.error('PeerJS initialization error:', error);
@@ -409,159 +383,57 @@ function setupConnectionHandlers(conn) {
         console.log('Connection opened with:', conn.peer);
         isConnectionReady = true;
         updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-        elements.fileTransferSection.classList.remove('hidden');
-        addRecentPeer(conn.peer);
         
-        // Clear any existing timeout for this connection
-        if (connectionTimeouts.has(conn.peer)) {
-            clearTimeout(connectionTimeouts.get(conn.peer));
-            connectionTimeouts.delete(conn.peer);
+        // Show active chat and hide welcome screen
+        if (elements.welcomeScreen) {
+            elements.welcomeScreen.classList.add('hidden');
         }
+        if (elements.activeChat) {
+            elements.activeChat.classList.remove('hidden');
+        }
+        
+        addRecentPeer(conn.peer);
         
         // Send a connection notification to the other peer
         conn.send({
-            type: 'connection-notification',
+            type: MESSAGE_TYPES.CONNECTION_NOTIFICATION,
             peerId: peer.id
         });
     });
 
     conn.on('data', async (data) => {
+        console.log('Received data:', data);
         try {
-            switch (data.type) {
-                case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
-                    await handleSimultaneousDownloadRequest(data, conn);
-                    break;
-                case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_START:
-                    await requestAndDownloadBlob(data);
-                    break;
-                case 'connection-notification':
-                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-                    break;
-                case 'keep-alive':
-                    // Handle keep-alive message
-                    console.log(`Keep-alive received from peer ${conn.peer}`);
-                    // Send keep-alive response
-                    conn.send({
-                        type: 'keep-alive-response',
-                        timestamp: Date.now(),
-                        peerId: peer.id
-                    });
-                    break;
-                case 'keep-alive-response':
-                    // Handle keep-alive response
-                    console.log(`Keep-alive response received from peer ${conn.peer}`);
-                    break;
-                case 'disconnect-notification':
-                    // Handle disconnect notification
-                    console.log(`Disconnect notification received from peer ${conn.peer}`);
-                    connections.delete(conn.peer);
-                    updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                        connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-                    showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-                    break;
-                case 'file-info':
-                    // Handle file info without blob
-                    const fileInfo = {
-                        name: data.fileName,
-                        type: data.fileType,
-                        size: data.fileSize,
-                        id: data.fileId,
-                        sharedBy: data.originalSender
-                    };
-                    // Add to history if not already present
-                    if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
-                        addFileToHistory(fileInfo, 'received');
-                        
-                        // If this is the host, forward to other peers
-                        if (connections.size > 1) {
-                            await forwardFileInfoToPeers(fileInfo, data.fileId);
-                        }
-                    }
-                    break;
-                case 'file-header':
-                    await handleFileHeader(data);
-                    break;
-                case 'file-chunk':
-                    await handleFileChunk(data);
-                    break;
-                case 'file-complete':
-                    await handleFileComplete(data);
-                    break;
-                case 'blob-request':
-                    // Handle direct blob request
-                    await handleBlobRequest(data, conn);
-                    break;
-                case 'blob-request-forwarded':
-                    // Handle forwarded blob request (host only)
-                    await handleForwardedBlobRequest(data, conn);
-                    break;
-                case 'blob-error':
-                    showNotification(`Failed to download file: ${data.error}`, 'error');
-                    elements.transferProgress.classList.add('hidden');
-                    updateTransferInfo('');
-                    break;
-                case MESSAGE_TYPES.TEXT_MESSAGE:
-                    await storeMessage(data);
-                    addMessageToChat(data, false);
-                    // Send delivery receipt
-                    conn.send({
-                        type: MESSAGE_TYPES.MESSAGE_STATUS,
-                        messageId: data.id,
-                        status: MESSAGE_STATUS.DELIVERED
-                    });
-                    break;
-                case MESSAGE_TYPES.TYPING_INDICATOR:
-                    handleTypingIndicator(data);
-                    break;
-                case MESSAGE_TYPES.MESSAGE_STATUS:
-                    updateMessageStatus(data.messageId, data.status);
-                    break;
-                case MESSAGE_TYPES.MESSAGE_REACTION:
-                    handleMessageReaction(data);
-                    break;
-                default:
-                    console.error('Unknown data type:', data.type);
+            if (data.type === MESSAGE_TYPES.TEXT_MESSAGE) {
+                addMessageToChat(data, false);
+            } else if (data.type === MESSAGE_TYPES.TYPING_INDICATOR) {
+                handleTypingIndicator(data);
+            } else if (data.type === MESSAGE_TYPES.CONNECTION_NOTIFICATION) {
+                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                // Show active chat and hide welcome screen
+                if (elements.welcomeScreen) {
+                    elements.welcomeScreen.classList.add('hidden');
+                }
+                if (elements.activeChat) {
+                    elements.activeChat.classList.remove('hidden');
+                }
             }
         } catch (error) {
-            console.error('Data handling error:', error);
-            showNotification('Error processing received data', 'error');
+            console.error('Error handling data:', error);
         }
     });
 
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
         connections.delete(conn.peer);
-        
-        // Clear timeout for this connection
-        if (connectionTimeouts.has(conn.peer)) {
-            clearTimeout(connectionTimeouts.get(conn.peer));
-            connectionTimeouts.delete(conn.peer);
-        }
-        
         updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
             connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-        if (connections.size === 0) {
-            showNotification('All peers disconnected', 'error');
-        } else {
-            showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-        }
+        showNotification(`Disconnected from peer ${conn.peer}`, 'warning');
     });
 
     conn.on('error', (error) => {
-        console.error('Connection Error:', error);
-        updateConnectionStatus('', 'Connection error');
-        showNotification('Connection error occurred', 'error');
-        
-        // Set a timeout to attempt reconnection
-        if (!connectionTimeouts.has(conn.peer)) {
-            const timeout = setTimeout(() => {
-                console.log(`Attempting to reconnect to ${conn.peer} after error...`);
-                reconnectToPeer(conn.peer);
-                connectionTimeouts.delete(conn.peer);
-            }, 5000); // Wait 5 seconds before attempting reconnection
-            
-            connectionTimeouts.set(conn.peer, timeout);
-        }
+        console.error('Connection error:', error);
+        showNotification(`Connection error: ${error.message}`, 'error');
     });
 }
 
@@ -1211,6 +1083,11 @@ function connectToPeer(remotePeerId) {
         return;
     }
 
+    if (remotePeerId === peer.id) {
+        showNotification('Cannot connect to yourself', 'error');
+        return;
+    }
+
     if (connections.has(remotePeerId)) {
         showNotification('Already connected to this peer', 'warning');
         return;
@@ -1219,15 +1096,32 @@ function connectToPeer(remotePeerId) {
     try {
         console.log('Attempting to connect to:', remotePeerId);
         updateConnectionStatus('connecting', 'Connecting...');
-        const newConnection = peer.connect(remotePeerId, {
+        
+        const conn = peer.connect(remotePeerId, {
             reliable: true
         });
-        connections.set(remotePeerId, newConnection);
-        setupConnectionHandlers(newConnection);
+
+        if (!conn) {
+            throw new Error('Failed to create connection');
+        }
+
+        connections.set(remotePeerId, conn);
+        setupConnectionHandlers(conn);
+        
+        // Set a timeout for the connection attempt
+        setTimeout(() => {
+            if (!conn.open) {
+                connections.delete(remotePeerId);
+                updateConnectionStatus('', 'Connection timed out');
+                showNotification('Connection attempt timed out', 'error');
+            }
+        }, 10000); // 10 second timeout
+
     } catch (error) {
         console.error('Connection attempt error:', error);
-        showNotification('Failed to establish connection', 'error');
+        showNotification(`Failed to connect: ${error.message}`, 'error');
         updateConnectionStatus('', 'Connection failed');
+        connections.delete(remotePeerId);
     }
 }
 

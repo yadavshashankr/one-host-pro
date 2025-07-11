@@ -576,6 +576,10 @@ input[type="file"] {
     color: var(--header-text);
 }
 
+#peer-id.generating {
+    color: #000000;
+}
+
 .peer-id-edit {
     width: 100%;
     padding: 4px 8px;

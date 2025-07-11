@@ -347,19 +347,21 @@ function setupPeerHandlers() {
 }
 
 // Initialize PeerJS
-function initPeerJS() {
+async function initPeerJS() {
     try {
+        if (elements.peerId) {
+            elements.peerId.textContent = 'Generating...';
+            elements.peerId.classList.add('generating');
+        }
+
         // Initialize the Peer object
-        peer = new Peer(undefined, {
-            host: 'peerjs.shashankyadav.dev',
-            port: 443,
-            path: '/',
+        peer = new Peer({
             secure: true,
             debug: 2,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' }
+                    { urls: 'stun1.l.google.com:19302' }
                 ]
             }
         });
@@ -368,6 +370,7 @@ function initPeerJS() {
             console.log('My peer ID is:', id);
             if (elements.peerId) {
                 elements.peerId.textContent = id;
+                elements.peerId.classList.remove('generating');
                 generateQRCode(id);
             }
             updateConnectionStatus('', 'Ready to connect');

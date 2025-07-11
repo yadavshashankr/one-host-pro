@@ -1717,8 +1717,9 @@ function initPeerIdEditing() {
 async function sendTextMessage(text, peerId) {
     if (!text.trim()) return;
     
+    const messageId = generateMessageId();
     const message = {
-        id: generateMessageId(),
+        id: messageId,
         type: MESSAGE_TYPES.TEXT_MESSAGE,
         content: text,
         sender: peer.id,
@@ -1738,6 +1739,8 @@ async function sendTextMessage(text, peerId) {
             await storeMessage(message);
             // Clear input
             elements.messageInput.value = '';
+            // Scroll to bottom
+            scrollToBottom();
         } catch (error) {
             console.error('Error sending message:', error);
             showNotification('Failed to send message', 'error');
@@ -1747,47 +1750,33 @@ async function sendTextMessage(text, peerId) {
     }
 }
 
-function generateMessageId() {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
+// Use a Map to track processed message IDs with timestamps
+const processedMessages = new Map();
 
-async function storeMessage(message) {
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction([MESSAGES_STORE], 'readwrite');
-        const store = transaction.objectStore(MESSAGES_STORE);
-        const request = store.add({
-            ...message,
-            conversationId: message.sender < message.receiver ? 
-                `${message.sender}-${message.receiver}` : 
-                `${message.receiver}-${message.sender}`
-        });
-
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function loadRecentMessages(peerId) {
-    if (!db) return;
-
-    const conversationId = peer.id < peerId ? 
-        `${peer.id}-${peerId}` : 
-        `${peerId}-${peer.id}`;
-
-    const transaction = db.transaction([MESSAGES_STORE], 'readonly');
-    const store = transaction.objectStore(MESSAGES_STORE);
-    const index = store.index('conversationId');
-    const request = index.getAll(IDBKeyRange.only(conversationId));
-
-    request.onsuccess = () => {
-        const messages = request.result;
-        elements.messageList.innerHTML = '';
-        messages.sort((a, b) => a.timestamp - b.timestamp)
-               .forEach(msg => addMessageToChat(msg, msg.sender === peer.id));
-    };
-}
+// Clean up old processed messages periodically
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, timestamp] of processedMessages) {
+        if (now - timestamp > 300000) { // 5 minutes
+            processedMessages.delete(id);
+        }
+    }
+}, 60000); // Clean up every minute
 
 function addMessageToChat(message, isSent) {
+    // Check if message already exists
+    if (document.querySelector(`.message[data-message-id="${message.id}"]`)) {
+        return;
+    }
+
+    // Check if message was already processed
+    if (processedMessages.has(message.id)) {
+        return;
+    }
+
+    // Mark message as processed
+    processedMessages.set(message.id, Date.now());
+
     const messageElement = document.createElement('div');
     messageElement.className = `message ${isSent ? 'sent' : 'received'}`;
     messageElement.dataset.messageId = message.id;
@@ -1805,11 +1794,19 @@ function addMessageToChat(message, isSent) {
         ${content}
         <div class="message-footer">
             <span class="message-time">${time}</span>
+            ${isSent ? createMessageStatus(message.status) : ''}
         </div>
     `;
 
     if (elements.messageList) {
-        elements.messageList.appendChild(messageElement);
+        elements.messageList.insertBefore(messageElement, elements.messageList.firstChild);
+        scrollToBottom();
+    }
+}
+
+// Function to scroll to bottom of message list
+function scrollToBottom() {
+    if (elements.messageList) {
         elements.messageList.scrollTop = elements.messageList.scrollHeight;
     }
 }

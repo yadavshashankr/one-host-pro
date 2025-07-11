@@ -354,12 +354,8 @@ async function initPeerJS() {
             elements.peerId.classList.add('generating');
         }
 
-        // Initialize the Peer object
+        // Initialize the Peer object with default server
         peer = new Peer({
-            host: 'peerjs.shashankyadev.dev',
-            port: 443,
-            path: '/',
-            secure: true,
             debug: 2,
             config: {
                 iceServers: [

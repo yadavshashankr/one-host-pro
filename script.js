@@ -354,13 +354,13 @@ async function initPeerJS() {
             elements.peerId.classList.add('generating');
         }
 
-        // Initialize the Peer object with default server
+        // Initialize the Peer object with default server and debug level 0
         peer = new Peer({
-            debug: 2,
+            debug: 0, // Reduce debug noise
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun1.l.google.com:19302' }
+                    { urls: 'stun:stun1.l.google.com:19302' }
                 ]
             }
         });
@@ -1080,6 +1080,28 @@ function initEventListeners() {
 
     // Initialize chat event listeners
     initChatEventListeners();
+
+    // Hamburger menu
+    const hamburgerMenu = document.querySelector('.hamburger-menu');
+    const sidebar = document.querySelector('.conversation-list');
+    
+    if (hamburgerMenu && sidebar) {
+        hamburgerMenu.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            // Update hamburger icon
+            const icon = hamburgerMenu.querySelector('.material-icons');
+            if (icon) {
+                icon.textContent = sidebar.classList.contains('collapsed') ? 'menu' : 'close';
+            }
+            // Adjust message container width
+            adjustMessageContainerWidth();
+        });
+    }
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        adjustMessageContainerWidth();
+    });
 }
 
 // Connect to peer function
@@ -1145,6 +1167,9 @@ function init() {
     initPeerIdEditing();
     initEventListeners();
     initChat();
+    
+    // Initial adjustment of message container width
+    adjustMessageContainerWidth();
 }
 
 // Add CSS classes for notification styling

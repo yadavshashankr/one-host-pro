@@ -1,10 +1,12 @@
 // Constants
 const CHUNK_SIZE = 16384; // 16KB chunks
 const DB_NAME = 'fileTransferDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Increased version for new object stores
 const STORE_NAME = 'files';
+const MESSAGES_STORE = 'messages';
 const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 60000; // 60 seconds
+const TYPING_TIMEOUT = 3000; // 3 seconds
 
 // Add simultaneous download message types
 const MESSAGE_TYPES = {
@@ -21,7 +23,20 @@ const MESSAGE_TYPES = {
     DISCONNECT_NOTIFICATION: 'disconnect-notification',
     SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
     SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
-    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
+    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start',
+    // New types for chat
+    TEXT_MESSAGE: 'text-message',
+    TYPING_INDICATOR: 'typing-indicator',
+    MESSAGE_STATUS: 'message-status',
+    MESSAGE_REACTION: 'message-reaction',
+    STATUS_UPDATE: 'status-update'
+};
+
+// Message Status
+const MESSAGE_STATUS = {
+    SENT: 'sent',
+    DELIVERED: 'delivered',
+    READ: 'read'
 };
 
 // DOM Elements
@@ -53,7 +68,20 @@ const elements = {
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
-    cancelEditButton: document.getElementById('cancel-edit')
+    cancelEditButton: document.getElementById('cancel-edit'),
+    // New elements for chat
+    welcomeScreen: document.getElementById('welcome-screen'),
+    activeChat: document.getElementById('active-chat'),
+    messageList: document.getElementById('message-list'),
+    messageInput: document.getElementById('message-input'),
+    sendMessage: document.getElementById('send-message'),
+    attachFile: document.getElementById('attach-file'),
+    emojiButton: document.getElementById('emoji-button'),
+    typingIndicator: document.getElementById('typing-indicator'),
+    chatMenu: document.getElementById('chat-menu'),
+    contextMenu: document.getElementById('message-context-menu'),
+    themeToggle: document.getElementById('theme-toggle'),
+    qrCodeToggle: document.getElementById('qr-code-toggle')
 };
 
 // State
@@ -66,6 +94,8 @@ let fileChunks = {}; // Initialize fileChunks object
 let keepAliveInterval = null;
 let connectionTimeouts = new Map();
 let isPageVisible = true;
+let typingTimeout = null;
+let currentTheme = localStorage.getItem('theme') || 'light';
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -162,10 +192,16 @@ async function initIndexedDB() {
             if (!db.objectStoreNames.contains(STORE_NAME)) {
                 db.createObjectStore(STORE_NAME, { keyPath: 'id' });
             }
+            if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
+                const messagesStore = db.createObjectStore(MESSAGES_STORE, { keyPath: 'id', autoIncrement: true });
+                messagesStore.createIndex('conversationId', 'conversationId', { unique: false });
+                messagesStore.createIndex('timestamp', 'timestamp', { unique: false });
+            }
         };
 
         request.onsuccess = (event) => {
             db = event.target.result;
+            loadRecentMessages();
         };
     } catch (error) {
         console.error('IndexedDB Error:', error);
@@ -451,6 +487,25 @@ function setupConnectionHandlers(conn) {
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
+                    break;
+                case MESSAGE_TYPES.TEXT_MESSAGE:
+                    await storeMessage(data);
+                    addMessageToChat(data, false);
+                    // Send delivery receipt
+                    conn.send({
+                        type: MESSAGE_TYPES.MESSAGE_STATUS,
+                        messageId: data.id,
+                        status: MESSAGE_STATUS.DELIVERED
+                    });
+                    break;
+                case MESSAGE_TYPES.TYPING_INDICATOR:
+                    handleTypingIndicator(data);
+                    break;
+                case MESSAGE_TYPES.MESSAGE_STATUS:
+                    updateMessageStatus(data.messageId, data.status);
+                    break;
+                case MESSAGE_TYPES.MESSAGE_REACTION:
+                    handleMessageReaction(data);
                     break;
                 default:
                     console.error('Unknown data type:', data.type);
@@ -1171,6 +1226,7 @@ function init() {
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
     initPeerIdEditing(); // Initialize peer ID editing
+    initChat(); // Initialize chat functionality
 }
 
 // Add CSS classes for notification styling
@@ -1735,4 +1791,272 @@ function initPeerIdEditing() {
     }
 }
 
+// Message handling functions
+async function sendTextMessage(text, peerId) {
+    if (!text.trim()) return;
+    
+    const messageId = generateMessageId();
+    const message = {
+        id: messageId,
+        type: MESSAGE_TYPES.TEXT_MESSAGE,
+        content: text,
+        sender: peer.id,
+        receiver: peerId,
+        timestamp: Date.now(),
+        status: MESSAGE_STATUS.SENT
+    };
+
+    // Store message locally
+    await storeMessage(message);
+
+    // Send to peer
+    const conn = connections.get(peerId);
+    if (conn && conn.open) {
+        conn.send(message);
+        addMessageToChat(message, true);
+    }
+
+    // Clear input
+    elements.messageInput.value = '';
+}
+
+function generateMessageId() {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+async function storeMessage(message) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([MESSAGES_STORE], 'readwrite');
+        const store = transaction.objectStore(MESSAGES_STORE);
+        const request = store.add({
+            ...message,
+            conversationId: message.sender < message.receiver ? 
+                `${message.sender}-${message.receiver}` : 
+                `${message.receiver}-${message.sender}`
+        });
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function loadRecentMessages(peerId) {
+    if (!db) return;
+
+    const conversationId = peer.id < peerId ? 
+        `${peer.id}-${peerId}` : 
+        `${peerId}-${peer.id}`;
+
+    const transaction = db.transaction([MESSAGES_STORE], 'readonly');
+    const store = transaction.objectStore(MESSAGES_STORE);
+    const index = store.index('conversationId');
+    const request = index.getAll(IDBKeyRange.only(conversationId));
+
+    request.onsuccess = () => {
+        const messages = request.result;
+        elements.messageList.innerHTML = '';
+        messages.sort((a, b) => a.timestamp - b.timestamp)
+               .forEach(msg => addMessageToChat(msg, msg.sender === peer.id));
+    };
+}
+
+function addMessageToChat(message, isSent) {
+    const messageElement = document.createElement('div');
+    messageElement.className = `message ${isSent ? 'sent' : 'received'}`;
+    messageElement.dataset.messageId = message.id;
+
+    let content = '';
+    if (message.type === MESSAGE_TYPES.TEXT_MESSAGE) {
+        content = `<div class="message-content">${escapeHtml(message.content)}</div>`;
+    } else if (message.type === MESSAGE_TYPES.FILE_INFO) {
+        content = createFileMessageContent(message);
+    }
+
+    const time = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const status = isSent ? createMessageStatus(message.status) : '';
+
+    messageElement.innerHTML = `
+        ${content}
+        <div class="message-footer">
+            <span class="message-time">${time}</span>
+            ${status}
+        </div>
+    `;
+
+    messageElement.addEventListener('contextmenu', showMessageContextMenu);
+    elements.messageList.appendChild(messageElement);
+    elements.messageList.scrollTop = elements.messageList.scrollHeight;
+}
+
+function createFileMessageContent(fileInfo) {
+    return `
+        <div class="file-message">
+            <span class="material-icons file-icon">${getFileIcon(fileInfo.type)}</span>
+            <div class="file-info">
+                <div class="file-name">${escapeHtml(fileInfo.name)}</div>
+                <div class="file-size">${formatFileSize(fileInfo.size)}</div>
+            </div>
+            ${fileInfo.status !== 'completed' ? 
+                `<button class="download-button" onclick="downloadFile('${fileInfo.id}')">
+                    <span class="material-icons">download</span>
+                </button>` : 
+                `<span class="material-icons download-completed">check_circle</span>`
+            }
+        </div>
+    `;
+}
+
+function createMessageStatus(status) {
+    const icons = {
+        [MESSAGE_STATUS.SENT]: 'check',
+        [MESSAGE_STATUS.DELIVERED]: 'done_all',
+        [MESSAGE_STATUS.READ]: 'done_all blue'
+    };
+    return `<span class="message-status material-icons">${icons[status] || icons.SENT}</span>`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showMessageContextMenu(event) {
+    event.preventDefault();
+    const messageElement = event.target.closest('.message');
+    if (!messageElement) return;
+
+    elements.contextMenu.style.display = 'block';
+    elements.contextMenu.style.left = `${event.pageX}px`;
+    elements.contextMenu.style.top = `${event.pageY}px`;
+    elements.contextMenu.dataset.messageId = messageElement.dataset.messageId;
+
+    document.addEventListener('click', hideMessageContextMenu);
+}
+
+function hideMessageContextMenu() {
+    elements.contextMenu.style.display = 'none';
+    document.removeEventListener('click', hideMessageContextMenu);
+}
+
+// Typing indicator
+function sendTypingIndicator(peerId) {
+    const conn = connections.get(peerId);
+    if (!conn || !conn.open) return;
+
+    conn.send({
+        type: MESSAGE_TYPES.TYPING_INDICATOR,
+        sender: peer.id
+    });
+
+    if (typingTimeout) clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+        conn.send({
+            type: MESSAGE_TYPES.TYPING_INDICATOR,
+            sender: peer.id,
+            isTyping: false
+        });
+    }, TYPING_TIMEOUT);
+}
+
+function handleTypingIndicator(data) {
+    const { sender, isTyping } = data;
+    elements.typingIndicator.classList.toggle('hidden', !isTyping);
+}
+
+// Theme handling
+function toggleTheme() {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    localStorage.setItem('theme', currentTheme);
+}
+
+// Initialize theme
+function initTheme() {
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    elements.themeToggle.addEventListener('click', toggleTheme);
+}
+
+// Event Listeners
+function initChatEventListeners() {
+    elements.messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const activePeer = getActivePeer();
+            if (activePeer) {
+                sendTextMessage(elements.messageInput.value, activePeer);
+            }
+        }
+    });
+
+    elements.messageInput.addEventListener('input', () => {
+        const activePeer = getActivePeer();
+        if (activePeer) {
+            sendTypingIndicator(activePeer);
+        }
+    });
+
+    elements.sendMessage.addEventListener('click', () => {
+        const activePeer = getActivePeer();
+        if (activePeer) {
+            sendTextMessage(elements.messageInput.value, activePeer);
+        }
+    });
+
+    elements.attachFile.addEventListener('click', () => {
+        elements.fileInput.click();
+    });
+
+    elements.contextMenu.addEventListener('click', (e) => {
+        const action = e.target.closest('li')?.dataset.action;
+        const messageId = elements.contextMenu.dataset.messageId;
+        if (action && messageId) {
+            handleContextMenuAction(action, messageId);
+        }
+        hideMessageContextMenu();
+    });
+
+    // QR Code toggle
+    elements.qrCodeToggle.addEventListener('click', () => {
+        elements.qrcode.parentElement.classList.toggle('hidden');
+    });
+}
+
+function handleContextMenuAction(action, messageId) {
+    const messageElement = document.querySelector(`.message[data-message-id="${messageId}"]`);
+    if (!messageElement) return;
+
+    switch (action) {
+        case 'reply':
+            // TODO: Implement reply functionality
+            break;
+        case 'react':
+            // TODO: Implement reaction functionality
+            break;
+        case 'copy':
+            const content = messageElement.querySelector('.message-content')?.textContent;
+            if (content) {
+                navigator.clipboard.writeText(content);
+                showNotification('Message copied to clipboard', 'success');
+            }
+            break;
+        case 'delete':
+            // TODO: Implement delete functionality
+            break;
+    }
+}
+
+function getActivePeer() {
+    // Get the currently active peer from the UI
+    const activeChatHeader = document.querySelector('.chat-header .peer-name');
+    return activeChatHeader ? activeChatHeader.dataset.peerId : null;
+}
+
+// Initialize chat
+function initChat() {
+    initChatEventListeners();
+    initTheme();
+}
+
+// Start the application
 init();

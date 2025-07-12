@@ -656,9 +656,11 @@ input[type="file"] {
     gap: 8px;
 }
 
+/* Search Container Styles */
 .search-container {
-    padding: 8px;
+    padding: 10px;
     background-color: var(--search-background);
+    position: relative;
 }
 
 .search-input-wrapper {
@@ -667,6 +669,11 @@ input[type="file"] {
     background-color: var(--card-background);
     border-radius: 20px;
     padding: 8px 12px;
+    transition: background-color 0.2s;
+}
+
+.search-input-wrapper:focus-within {
+    background-color: var(--background-color);
 }
 
 .search-input-wrapper input {
@@ -675,11 +682,89 @@ input[type="file"] {
     padding: 0 8px;
     width: 100%;
     color: var(--input-text-color);
+    font-size: 0.95rem;
+}
+
+.search-input-wrapper input:focus {
+    outline: none;
 }
 
 .search-input-wrapper .material-icons {
     color: var(--text-color);
     opacity: 0.6;
+    font-size: 20px;
+}
+
+/* Recent Peers Styles */
+.recent-peers {
+    position: absolute;
+    top: 100%;
+    left: 10px;
+    right: 10px;
+    background-color: var(--card-background);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    z-index: 100;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 5px;
+}
+
+.recent-peers-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 500;
+    color: var(--text-color);
+}
+
+.clear-peers {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    color: var(--text-color);
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.clear-peers:hover {
+    opacity: 1;
+}
+
+#recent-peers-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#recent-peers-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 15px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    color: var(--text-color);
+}
+
+#recent-peers-list li:hover {
+    background-color: var(--background-color);
+}
+
+#recent-peers-list li .material-icons {
+    font-size: 20px;
+    opacity: 0.7;
+}
+
+/* Hide recent peers by default */
+.recent-peers.hidden {
+    display: none;
 }
 
 /* Chat Window Styles */

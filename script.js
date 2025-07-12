@@ -1140,6 +1140,56 @@ function initEventListeners() {
             checkConnectionStatus();
         }
     });
+
+    // Peer search functionality
+    if (elements.peerSearch) {
+        elements.peerSearch.addEventListener('input', (e) => {
+            const searchTerm = e.target.value.trim();
+            
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+
+            // Show recent peers if search is empty
+            if (!searchTerm) {
+                elements.recentPeers.classList.remove('hidden');
+                return;
+            }
+
+            // Filter recent peers based on search term
+            searchTimeout = setTimeout(() => {
+                const filteredPeers = recentPeers.filter(peerId => 
+                    peerId.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+                updateFilteredPeersList(filteredPeers);
+            }, 300);
+        });
+
+        elements.peerSearch.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const remotePeerId = e.target.value.trim();
+                if (remotePeerId) {
+                    connectToPeer(remotePeerId);
+                    elements.recentPeers.classList.add('hidden');
+                }
+            }
+        });
+
+        // Show recent peers when search input is focused
+        elements.peerSearch.addEventListener('focus', () => {
+            if (!elements.peerSearch.value.trim()) {
+                elements.recentPeers.classList.remove('hidden');
+            }
+        });
+
+        // Hide recent peers when clicked outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.search-container') && !e.target.closest('.recent-peers')) {
+                elements.recentPeers.classList.add('hidden');
+            }
+        });
+    }
 }
 
 // Connect to peer function
@@ -1173,6 +1223,13 @@ function connectToPeer(remotePeerId) {
 
         connections.set(remotePeerId, conn);
         setupConnectionHandlers(conn);
+        
+        // Add to recent peers
+        addRecentPeer(remotePeerId);
+        
+        // Clear search input
+        elements.peerSearch.value = '';
+        elements.recentPeers.classList.add('hidden');
         
         // Set a timeout for the connection attempt
         setTimeout(() => {

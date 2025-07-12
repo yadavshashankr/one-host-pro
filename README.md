@@ -1,27 +1,11 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="One-Host" width="400">
+  <img src="assets/logo.svg" alt="WebRTC File Sharing Logo" width="400">
 </p>
 
-A browser-based peer-to-peer chat and file sharing application using WebRTC. Chat and share files directly between browsers with no server storage.
+A browser-based peer-to-peer file sharing application using WebRTC. Share files directly between browsers with no server storage.
 
 ## ✨ Features
 
-### 💬 Chat Features
-- 📱 WhatsApp-like chat interface
-- 💭 Real-time text messaging
-- 📎 Integrated file sharing in chat
-- 🔔 Typing indicators
-- ✅ Message status (sent/delivered/read)
-- 👥 Group chat support
-- 🌙 Dark mode
-- 🔍 Search conversations
-- 💾 Message history
-- 👍 Message reactions
-- ↩️ Message replies
-- 🗑️ Message deletion
-- 📱 Mobile-responsive design
-
-### 📂 File Sharing Features
 - 🔒 Direct peer-to-peer file transfer
 - 📱 Mobile and desktop support
 - 🚀 Fast transfers with chunked file handling
@@ -40,69 +24,68 @@ A browser-based peer-to-peer chat and file sharing application using WebRTC. Cha
 1. Open the application in your browser
 2. You'll receive a unique Peer ID
 3. Share your ID with others via:
-   - Share button
+   - Copy button
+   - Share button (mobile)
    - QR code
 4. Connect to other peers using their ID
-5. Start chatting and sharing files!
 
 ## 💻 Usage
 
-### Chat Interface
+### Connecting to Peers
 
-1. **Connecting with Peers**:
-   - Enter a peer ID in the search bar
-   - Select from recent connections
-   - Scan QR code
-   - Share your ID with others
+1. **Share Your ID**:
+   - Copy your Peer ID using the copy button
+   - Use the share button on mobile
+   - Let others scan your QR code
+   - Your ID appears in others' recent peers list
 
-2. **Sending Messages**:
-   - Type in the message input
-   - Press Enter or click Send
-   - See real-time typing indicators
-   - Message status updates (✓, ✓✓, 💙)
+2. **Connect to Others**:
+   - Enter their Peer ID in the "Connect to Peer" field
+   - Click "Connect" or press Enter
+   - Wait for the connection (green status indicator)
+   - See real-time connection status updates
 
-3. **Sharing Files**:
-   - Click attachment button
-   - Select files to share
-   - View transfer progress in chat
-   - Download files directly from messages
+### Sending Files
 
-4. **Message Features**:
-   - Long press/right-click for options
-   - React with emojis
-   - Reply to messages
-   - Copy message text
-   - Delete messages
+1. **Select Files**:
+   - Click the drop zone to choose files
+   - Drag and drop files into the zone
+   - Multiple files are handled automatically
+   - Files are queued if needed
 
-5. **Customization**:
-   - Toggle dark mode
-   - Set display name
-   - Manage blocked peers
-   - Clear chat history
+2. **Transfer Process**:
+   - Real-time progress bar
+   - Progress updates in 1% increments
+   - Automatic error recovery
+   - Files appear in "Sent Files" list
+   - All connected peers receive file information
 
-### File Sharing
+### Receiving Files
 
-1. **Sending Files**:
-   - Click attachment button in chat
-   - Select multiple files
-   - View progress in chat window
-   - Files appear as rich messages
+1. **File Reception**:
+   - Automatic file information reception
+   - Direct download from original sender
+   - Progress bar shows download status
+   - Success notification on completion
+   - Visual feedback with color changes
+   - One-click file opening after download
 
-2. **Receiving Files**:
-   - Files appear as messages
-   - Click to download
-   - View transfer progress
-   - Open files after download
+2. **File Management**:
+   - Files listed in "Received Files" section
+   - Shows original sender information
+   - Download/Open button with status indication
+   - Background color changes on completion
+   - File size and type information
+   - Persistent file history
 
 ## 🔒 Privacy & Security
 
 - Direct peer-to-peer encrypted transfers
-- No server storage of messages or files
+- No server storage of files
 - Direct browser-to-browser connections
-- No intermediate routing
+- No intermediate file routing
 - Automatic connection encryption via WebRTC
 - Keep-alive mechanism for connection stability
-- Option to block peers
 
 ## 💡 Tips & Troubleshooting
 
@@ -112,60 +95,51 @@ A browser-based peer-to-peer chat and file sharing application using WebRTC. Cha
    - Automatic reconnection attempts
    - Refresh page if issues persist
 
-2. **Chat Features**:
-   - Messages are stored locally
-   - Clear chat history manually
-   - Check message status indicators
-   - Use search to find messages
-
-3. **File Transfer**:
+2. **File Transfer**:
    - Large files are automatically chunked
-   - Progress shown in chat messages
+   - Progress bars show accurate status
    - Files download directly from source
    - Transfer recovery on connection issues
 
-4. **Best Practices**:
-   - Keep browser tab active
+3. **Best Practices**:
+   - Keep browser tab active during transfers
    - Ensure stable internet connection
-   - Monitor connection status
-   - Wait for transfer completion
-   - Regular chat history cleanup
+   - Monitor connection status indicator
+   - Check notifications for transfer status
+   - Wait for visual confirmation of downloads
 
 ## 🛠️ Technical Details
 
-- WebRTC for peer-to-peer connections
-- IndexedDB for message and file storage
+- Uses WebRTC for peer-to-peer connections
 - 16KB chunk size for efficient transfers
-- Real-time message delivery
+- IndexedDB for file history storage
 - Automatic peer discovery
 - Connection state management
 - Error recovery mechanisms
-- Dynamic UI updates
-- Responsive design system
+- Real-time status updates
+- Dynamic UI state management
 
 ## 🌟 Recent Updates
 
-- WhatsApp-like chat interface
-- Real-time messaging
-- Message status indicators
-- Typing notifications
-- Dark mode support
-- File sharing in chat
-- Message reactions
-- Search functionality
+- Enhanced download completion indicators
+- Quick file access after download
+- Visual status feedback improvements
+- Direct peer-to-peer file downloads
+- Improved connection stability
+- Better error handling
+- Enhanced progress tracking
+- File history persistence
+- Recent peers functionality
+- QR code connection option
 - Mobile optimization
-- Group chat support
-- Message history
-- Context menu actions
-- Improved UI/UX
 
 ## 📝 Notes
 
-- Messages and files transfer directly between peers
-- No message or file size limits (browser dependent)
+- File transfers are direct between peers
+- No file size limits (browser dependent)
 - Supports all file types
-- Real-time status updates
+- Real-time transfer status
 - Automatic connection management
 - Cross-platform compatibility
-- Intuitive chat interface
-- Seamless file sharing integration
+- Intuitive visual feedback
+- Seamless file opening

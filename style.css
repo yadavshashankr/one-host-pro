@@ -46,7 +46,12 @@
     box-sizing: border-box;
 }
 
+/* Root styles */
 body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     line-height: 1.6;
     color: var(--text-color);
@@ -54,65 +59,39 @@ body {
 }
 
 .container {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 20px;
+    height: 100vh;
+    width: 100vw;
+    position: relative;
 }
 
-/* Header styles */
-header {
-    text-align: center;
-    margin-bottom: 2rem;
-}
-
-.logo-container {
-    margin: 1.5rem 0;
+/* Peer Info Container */
+.peer-info-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--card-background);
+    z-index: 1000;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
     align-items: center;
+    justify-content: center;
+    padding: 20px;
+    transition: opacity 0.3s ease;
 }
 
-.logo {
-    height: 80px;
-    width: auto;
-    max-width: 90%;
-    transition: transform 0.2s ease;
+.peer-info-container.hidden {
+    display: none;
 }
 
-@media (max-width: 768px) {
-    .logo {
-        height: 60px;
-    }
-}
-
-@media (max-width: 480px) {
-    .logo {
-        height: 50px;
-    }
-}
-
-h1 {
-    color: var(--primary-color);
-    margin-bottom: 1rem;
-}
-
-h2 {
-    font-size: 1.5rem;
-    margin-bottom: 1rem;
-}
-
-h3 {
-    font-size: 1.2rem;
-    margin-bottom: 0.8rem;
-}
-
-/* Connection section styles */
 #connection-section {
     background: var(--card-background);
     border-radius: 8px;
     padding: 20px;
     box-shadow: 0 2px 4px var(--shadow-color);
-    margin-bottom: 2rem;
+    width: 100%;
+    max-width: 500px;
 }
 
 .peer-info {
@@ -616,18 +595,30 @@ input[type="file"] {
 .chat-container {
     display: flex;
     height: 100vh;
-    max-width: 1400px;
-    margin: 0 auto;
+    width: 100%;
     background-color: var(--background-color);
 }
 
 /* Conversation List Styles */
 .conversation-list {
     width: 350px;
+    min-width: 350px;
     background-color: var(--sidebar-background);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+/* Hamburger Menu */
+.hamburger-menu {
+    margin-right: 10px;
+}
+
+.hamburger-menu:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .sidebar-header {
@@ -758,8 +749,10 @@ input[type="file"] {
     padding: 20px;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
     gap: 8px;
-    margin-bottom: 60px; /* Space for the input area */
+    height: calc(100vh - 120px); /* Account for header and input */
+    background-color: var(--chat-background);
 }
 
 .message {
@@ -832,30 +825,37 @@ input[type="file"] {
 
 /* Message Input Styles */
 .message-input-container {
-    background-color: var(--card-background);
-    padding: 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    position: absolute;
+    position: sticky;
     bottom: 0;
     left: 0;
     right: 0;
+    background-color: var(--card-background);
+    padding: 15px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
     border-top: 1px solid var(--border-color);
+    z-index: 100;
 }
 
 .message-input-wrapper {
     flex: 1;
+    display: flex;
+    align-items: center;
     background-color: var(--background-color);
     border-radius: 20px;
     padding: 8px 16px;
 }
 
-.message-input-wrapper input {
+#message-input {
     width: 100%;
     border: none;
     background: none;
     color: var(--input-text-color);
+    padding: 8px 0;
+    resize: none;
+    max-height: 100px;
+    min-height: 24px;
 }
 
 /* Typing Indicator */
@@ -931,20 +931,38 @@ emoji-picker {
 
     .conversation-list {
         width: 100%;
-        height: 100vh;
+        min-width: 0;
     }
 
     .chat-window {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 200;
         display: none;
     }
 
     .chat-window.active {
         display: flex;
-        height: 100vh;
     }
 
     .conversation-list.hidden {
         display: none;
+    }
+
+    .message-input-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 10px;
+    }
+
+    .message-list {
+        height: calc(100vh - 130px);
+        padding-bottom: 60px;
     }
 }
 

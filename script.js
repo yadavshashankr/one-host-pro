@@ -71,7 +71,9 @@ const elements = {
     chatMenu: document.getElementById('chat-menu'),
     contextMenu: document.getElementById('message-context-menu'),
     themeToggle: document.getElementById('theme-toggle'),
-    qrCodeToggle: document.getElementById('qr-code-toggle')
+    qrCodeToggle: document.getElementById('qr-code-toggle'),
+    peerInfoContainer: document.querySelector('.peer-info-container'),
+    hamburgerMenu: document.querySelector('.hamburger-menu')
 };
 
 // State
@@ -1063,6 +1065,81 @@ function initEventListeners() {
 
     // Initialize chat event listeners
     initChatEventListeners();
+
+    // Hamburger menu
+    if (elements.hamburgerMenu) {
+        elements.hamburgerMenu.addEventListener('click', togglePeerInfo);
+    }
+
+    // File input handling
+    if (elements.attachFile) {
+        elements.attachFile.addEventListener('click', () => {
+            if (connections.size === 0) {
+                showNotification('Please connect to a peer first', 'error');
+                return;
+            }
+            elements.fileInput?.click();
+        });
+    }
+
+    if (elements.fileInput) {
+        elements.fileInput.addEventListener('change', async (e) => {
+            const files = e.target.files;
+            if (!files?.length) return;
+
+            const activePeer = getActivePeer();
+            if (!activePeer) {
+                showNotification('Please select a peer to send files to', 'error');
+                return;
+            }
+
+            const conn = connections.get(activePeer);
+            if (!conn?.open) {
+                showNotification('Connection lost. Please reconnect.', 'error');
+                return;
+            }
+
+            try {
+                for (const file of files) {
+                    await sendFileToPeer(file, conn);
+                }
+            } catch (error) {
+                console.error('Error sending files:', error);
+                showNotification('Failed to send files', 'error');
+            }
+
+            // Clear input
+            e.target.value = '';
+        });
+    }
+
+    // Message input handling
+    if (elements.messageInput) {
+        elements.messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const activePeer = getActivePeer();
+                if (activePeer) {
+                    sendTextMessage(elements.messageInput.value, activePeer);
+                }
+            }
+        });
+    }
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) {
+            elements.peerInfoContainer?.classList.add('hidden');
+        }
+    });
+
+    // Handle visibility change
+    document.addEventListener('visibilitychange', () => {
+        isPageVisible = !document.hidden;
+        if (isPageVisible) {
+            checkConnectionStatus();
+        }
+    });
 }
 
 // Connect to peer function
@@ -1169,16 +1246,20 @@ document.head.appendChild(style);
 
 // Add function to update connection status
 function updateConnectionStatus(status, message) {
-    elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
-    
-    // Update title to show number of connections
-    if (connections && connections.size > 0) {
-        document.title = `(${connections.size}) One-Host`;
-    } else {
-        document.title = 'One-Host';
+    if (elements.statusDot) {
+        elements.statusDot.className = 'status-dot' + (status ? ` ${status}` : '');
     }
-    updateEditButtonState(); // Add this line
+    if (elements.statusText) {
+        elements.statusText.textContent = message || 'Not connected';
+    }
+
+    // Update hamburger menu state
+    if (elements.hamburgerMenu) {
+        elements.hamburgerMenu.disabled = !connections.size;
+        if (!connections.size) {
+            elements.peerInfoContainer?.classList.remove('hidden');
+        }
+    }
 }
 
 // Update files list display
@@ -1399,17 +1480,45 @@ function checkConnections() {
 }
 
 // Reconnect to a specific peer
-function reconnectToPeer(peerId) {
+async function reconnectToPeer(peerId) {
+    const attempts = reconnectAttempts.get(peerId) || 0;
+    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.log(`Max reconnection attempts reached for peer ${peerId}`);
+        reconnectAttempts.delete(peerId);
+        showNotification(`Unable to reconnect to peer ${peerId}`, 'error');
+        return;
+    }
+
     try {
-        console.log(`Attempting to reconnect to peer: ${peerId}`);
+        console.log(`Attempting to reconnect to peer: ${peerId} (Attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
         const newConnection = peer.connect(peerId, {
             reliable: true
         });
-        connections.set(peerId, newConnection);
-        setupConnectionHandlers(newConnection);
+        
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+            }, 10000);
+
+            newConnection.on('open', () => {
+                clearTimeout(timeout);
+                connections.set(peerId, newConnection);
+                setupConnectionHandlers(newConnection);
+                reconnectAttempts.delete(peerId);
+                resolve();
+            });
+
+            newConnection.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+
     } catch (error) {
         console.error(`Failed to reconnect to peer ${peerId}:`, error);
-        connections.delete(peerId);
+        reconnectAttempts.set(peerId, attempts + 1);
+        // Exponential backoff for retry
+        setTimeout(() => reconnectToPeer(peerId), Math.min(1000 * Math.pow(2, attempts), 10000));
     }
 }
 
@@ -1771,6 +1880,12 @@ async function loadRecentMessages(peerId) {
 }
 
 function addMessageToChat(message, isSent) {
+    // Check for duplicate message
+    if (processedMessages.has(message.id)) {
+        return;
+    }
+    processedMessages.add(message.id);
+
     const messageElement = document.createElement('div');
     messageElement.className = `message ${isSent ? 'sent' : 'received'}`;
     messageElement.dataset.messageId = message.id;
@@ -1779,7 +1894,7 @@ function addMessageToChat(message, isSent) {
     if (message.type === MESSAGE_TYPES.TEXT_MESSAGE) {
         content = `<div class="message-content">${escapeHtml(message.content)}</div>`;
     } else if (message.type === MESSAGE_TYPES.FILE_INFO) {
-        content = createFileMessageContent(message.content);
+        content = createFileMessageContent(message);
     }
 
     const time = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1788,13 +1903,19 @@ function addMessageToChat(message, isSent) {
         ${content}
         <div class="message-footer">
             <span class="message-time">${time}</span>
+            ${isSent ? createMessageStatus(message.status) : ''}
         </div>
     `;
 
     if (elements.messageList) {
         elements.messageList.appendChild(messageElement);
-        elements.messageList.scrollTop = elements.messageList.scrollHeight;
+        scrollToBottom();
     }
+
+    // Clean up old message IDs after 5 minutes
+    setTimeout(() => {
+        processedMessages.delete(message.id);
+    }, 300000);
 }
 
 function createFileMessageContent(fileInfo) {

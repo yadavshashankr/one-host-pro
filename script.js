@@ -43,7 +43,12 @@ const elements = {
     transferStatus: document.getElementById('transfer-status'),
     notifications: document.getElementById('notifications'),
     themeToggle: document.getElementById('theme-toggle'),
-    shareId: document.getElementById('share-id')
+    shareId: document.getElementById('share-id'),
+    peerInfoToggle: document.getElementById('peer-info-toggle'),
+    peerInfoSection: document.getElementById('peer-info-section'),
+    mobilePeerId: document.getElementById('mobile-peer-id'),
+    mobileShareId: document.getElementById('mobile-share-id'),
+    mobilePeerSearch: document.getElementById('mobile-peer-search'),
 };
 
 // State
@@ -105,7 +110,7 @@ function initPeerJS() {
     });
 
     peer.on('open', (id) => {
-        elements.myPeerId.textContent = id;
+        updatePeerIdDisplays(id);
         showNotification('Connected to server', 'success');
     });
 
@@ -415,6 +420,21 @@ function showNotification(message, type = 'info') {
     setTimeout(() => notification.remove(), 3000);
 }
 
+// Share ID functionality
+function shareId() {
+    if (peer && peer.id) {
+        navigator.clipboard.writeText(peer.id)
+            .then(() => {
+                showNotification('Peer ID copied to clipboard', 'success');
+            })
+            .catch(() => {
+                showNotification('Failed to copy Peer ID', 'error');
+            });
+    } else {
+        showNotification('Peer ID not available', 'error');
+    }
+}
+
 // Event Listeners
 function initEventListeners() {
     // Send message
@@ -453,6 +473,26 @@ function initEventListeners() {
             const peerId = elements.peerSearch.value.trim();
             if (peerId && peerId !== peer.id) {
                 connectToPeer(peerId);
+            }
+        }
+    });
+
+    // Mobile peer info toggle
+    elements.peerInfoToggle.addEventListener('click', () => {
+        elements.peerInfoSection.classList.toggle('active');
+    });
+
+    // Mobile share ID
+    elements.mobileShareId.addEventListener('click', shareId);
+
+    // Mobile peer search
+    elements.mobilePeerSearch.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const peerId = elements.mobilePeerSearch.value.trim();
+            if (peerId && peerId !== peer.id) {
+                connectToPeer(peerId);
+                elements.peerInfoSection.classList.remove('active');
+                elements.mobilePeerSearch.value = '';
             }
         }
     });

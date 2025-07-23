@@ -65,7 +65,6 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
    - Real-time progress bar
    - Progress updates in 1% increments
    - Automatic error recovery
-   - Files appear in "Sent Files" list
    - All connected peers receive file information
 
 ### Receiving Files
@@ -75,14 +74,12 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
    - Direct download from original sender
    - Progress bar shows download status
    - Success notification on completion
-   - Visual feedback with color changes
    - One-click file opening after download
 
 2. **File Management**:
    - Files listed in "Received Files" section
    - Shows original sender information
    - Download/Open button with status indication
-   - Background color changes on completion
    - File size and type information
    - Persistent file history
 
@@ -105,7 +102,6 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 
 2. **File Transfer**:
    - Large files are automatically chunked
-   - Progress bars show accurate status
    - Files download directly from source
    - Transfer recovery on connection issues
 
@@ -126,15 +122,6 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 - Error recovery mechanisms
 - Real-time status updates
 - Dynamic UI state management
-
-## 🌟 Recent Updates
-
-- **Modular Architecture**: Complete codebase restructuring for better maintainability
-- **Service Layer**: Dedicated services for storage, notifications, and peer management
-- **Enhanced Download Indicators**: Visual progress tracking and completion feedback
-- **Direct File Downloads**: Optimized peer-to-peer file transfer
-- **Improved Connection Stability**: Better error handling and recovery
-- **Mobile Optimization**: Enhanced mobile experience and responsiveness
 
 ## 📝 Notes
 

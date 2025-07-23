@@ -231,7 +231,7 @@ function initShareButton() {
 async function shareId() {
     try {
         const peerId = elements.peerId.textContent;
-        const baseUrl = window.location.origin + window.location.pathname;
+        const baseUrl = 'https://one-host.app/';
         const qrUrl = `${baseUrl}?peer=${peerId}`;
         await navigator.share({ url: qrUrl });
         showNotification('Share successful!', 'success');

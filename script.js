@@ -325,78 +325,9 @@ function setupPeerHandlers() {
 
     peer.on('connection', (conn) => {
         console.log('Incoming connection from:', conn.peer);
-        
-        // Check if we already have a connection to this peer
-        const existingConn = connections.get(conn.peer);
-        if (existingConn && existingConn.open) {
-            console.log('Connection to this peer already exists, closing incoming connection');
-            conn.close();
-            return;
-        }
-        
-        // Remove any existing closed connection
-        if (existingConn) {
-            connections.delete(conn.peer);
-        }
-        
         connections.set(conn.peer, conn);
         updateConnectionStatus('connecting', 'Incoming connection...');
-        
-        // Set a timeout for the connection to open
-        const connectionTimeout = setTimeout(() => {
-            if (!conn.open) {
-                console.log(`Connection to ${conn.peer} timed out`);
-                connections.delete(conn.peer);
-                updateConnectionStatus('', 'Connection timeout');
-                showNotification('Connection timeout', 'error');
-            }
-        }, 10000); // 10 second timeout
-        
-        conn.on('open', () => {
-            clearTimeout(connectionTimeout);
-            console.log('Incoming connection opened with:', conn.peer);
-            isConnectionReady = true;
-            updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-            elements.fileTransferSection.classList.remove('hidden');
-            addRecentPeer(conn.peer);
-            
-            // Clear any existing timeout for this connection
-            if (connectionTimeouts.has(conn.peer)) {
-                clearTimeout(connectionTimeouts.get(conn.peer));
-                connectionTimeouts.delete(conn.peer);
-            }
-            
-            // Send a connection notification to the other peer
-            conn.send({
-                type: 'connection-notification',
-                peerId: peer.id
-            });
-        });
-        
-        conn.on('close', () => {
-            clearTimeout(connectionTimeout);
-            console.log('Incoming connection closed with:', conn.peer);
-            connections.delete(conn.peer);
-            
-            updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-            if (connections.size === 0) {
-                showNotification('All peers disconnected', 'error');
-            } else {
-                showNotification(`Peer ${conn.peer} disconnected`, 'warning');
-            }
-        });
-        
-        conn.on('error', (error) => {
-            clearTimeout(connectionTimeout);
-            console.error('Incoming connection error:', error);
-            connections.delete(conn.peer);
-            updateConnectionStatus('', 'Connection error');
-            showNotification('Connection error occurred', 'error');
-        });
-        
-        // Set up data handling
-        setupConnectionDataHandlers(conn);
+        setupConnectionHandlers(conn);
     });
 
     peer.on('error', (error) => {
@@ -437,17 +368,11 @@ function setupPeerHandlers() {
         updateConnectionStatus('', 'Disconnected');
         isConnectionReady = false;
         
-        // Only try to reconnect if peer is not destroyed and not already reconnecting
+        // Try to reconnect
         setTimeout(() => {
-            if (peer && !peer.destroyed && !peer.disconnected) {
+            if (peer && !peer.destroyed) {
                 console.log('Attempting to reconnect...');
-                try {
-                    peer.reconnect();
-                } catch (error) {
-                    console.error('Reconnection failed:', error);
-                    // If reconnection fails, reinitialize the peer
-                    initPeerJS();
-                }
+                peer.reconnect();
             }
         }, 3000);
     });
@@ -477,29 +402,10 @@ function initPeerJS() {
         // Create new peer with auto-generated ID
         peer = new Peer({
             debug: 2,
-            host: 'peerjs-server.herokuapp.com',
-            port: 443,
-            path: '/',
-            secure: true,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' },
-                    {
-                        urls: 'turn:openrelay.metered.ca:80',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    },
-                    {
-                        urls: 'turn:openrelay.metered.ca:443',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    },
-                    {
-                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
-                    }
+                    { urls: 'stun:global.stun.twilio.com:3478' }
                 ]
             }
         });
@@ -513,8 +419,28 @@ function initPeerJS() {
     }
 }
 
-// Setup connection data handlers (separate from connection lifecycle handlers)
-function setupConnectionDataHandlers(conn) {
+// Setup connection event handlers
+function setupConnectionHandlers(conn) {
+    conn.on('open', () => {
+        console.log('Connection opened with:', conn.peer);
+        isConnectionReady = true;
+        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+        elements.fileTransferSection.classList.remove('hidden');
+        addRecentPeer(conn.peer);
+        
+        // Clear any existing timeout for this connection
+        if (connectionTimeouts.has(conn.peer)) {
+            clearTimeout(connectionTimeouts.get(conn.peer));
+            connectionTimeouts.delete(conn.peer);
+        }
+        
+        // Send a connection notification to the other peer
+        conn.send({
+            type: 'connection-notification',
+            peerId: peer.id
+        });
+    });
+
     conn.on('data', async (data) => {
         try {
             switch (data.type) {
@@ -558,8 +484,15 @@ function setupConnectionDataHandlers(conn) {
                         id: data.fileId,
                         sharedBy: data.originalSender
                     };
-                    addFileToHistory(fileInfo, 'received');
-                    showNotification(`Received file info: ${data.fileName}`, 'info');
+                    // Add to history if not already present
+                    if (!fileHistory.sent.has(data.fileId) && !fileHistory.received.has(data.fileId)) {
+                        addFileToHistory(fileInfo, 'received');
+                        
+                        // If this is the host, forward to other peers
+                        if (connections.size > 1) {
+                            await forwardFileInfoToPeers(fileInfo, data.fileId);
+                        }
+                    }
                     break;
                 case 'file-header':
                     await handleFileHeader(data);
@@ -591,32 +524,6 @@ function setupConnectionDataHandlers(conn) {
             showNotification('Error processing received data', 'error');
         }
     });
-}
-
-// Setup connection event handlers (for outgoing connections)
-function setupConnectionHandlers(conn) {
-    conn.on('open', () => {
-        console.log('Connection opened with:', conn.peer);
-        isConnectionReady = true;
-        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-        elements.fileTransferSection.classList.remove('hidden');
-        addRecentPeer(conn.peer);
-        
-        // Clear any existing timeout for this connection
-        if (connectionTimeouts.has(conn.peer)) {
-            clearTimeout(connectionTimeouts.get(conn.peer));
-            connectionTimeouts.delete(conn.peer);
-        }
-        
-        // Send a connection notification to the other peer
-        conn.send({
-            type: 'connection-notification',
-            peerId: peer.id
-        });
-    });
-
-    // Set up data handling
-    setupConnectionDataHandlers(conn);
 
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
@@ -1249,87 +1156,19 @@ elements.connectButton.addEventListener('click', () => {
         return;
     }
 
-    // Validate and clean the peer ID
-    const validatedPeerId = validatePeerId(remotePeerIdValue);
-    if (!validatedPeerId) {
-        showNotification('Invalid Peer ID format. Use only letters, numbers, hyphens, and underscores (3-50 characters)', 'error');
-        return;
-    }
-
-    if (connections.has(validatedPeerId)) {
+    if (connections.has(remotePeerIdValue)) {
         showNotification('Already connected to this peer', 'warning');
         return;
     }
 
-    // Check if our peer is ready
-    if (!isPeerAvailable(validatedPeerId)) {
-        showNotification('Please wait for your peer to be ready', 'error');
-        return;
-    }
-
     try {
-        console.log('Attempting to connect to:', validatedPeerId);
+        console.log('Attempting to connect to:', remotePeerIdValue);
         updateConnectionStatus('connecting', 'Connecting...');
-        
-        // Set a timeout for the connection attempt
-        const connectionAttemptTimeout = setTimeout(() => {
-            if (connections.has(validatedPeerId)) {
-                const conn = connections.get(validatedPeerId);
-                if (!conn.open) {
-                    console.log('Connection attempt timed out');
-                    connections.delete(validatedPeerId);
-                    updateConnectionStatus('', 'Connection timeout');
-                    showNotification('Connection attempt timed out', 'error');
-                }
-            }
-        }, 15000); // 15 second timeout
-
-        const newConnection = peer.connect(validatedPeerId, {
-            reliable: true,
-            serialization: 'json'
+        const newConnection = peer.connect(remotePeerIdValue, {
+            reliable: true
         });
-        
-        connections.set(validatedPeerId, newConnection);
-        
-        // Set up connection handlers with timeout cleanup
-        const originalOpenHandler = () => {
-            clearTimeout(connectionAttemptTimeout);
-            console.log('Connection opened with:', validatedPeerId);
-            isConnectionReady = true;
-            updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
-            elements.fileTransferSection.classList.remove('hidden');
-            addRecentPeer(validatedPeerId);
-            
-            // Send a connection notification to the other peer
-            newConnection.send({
-                type: 'connection-notification',
-                peerId: peer.id
-            });
-        };
-        
-        const originalCloseHandler = () => {
-            clearTimeout(connectionAttemptTimeout);
-            console.log('Connection closed with:', validatedPeerId);
-            connections.delete(validatedPeerId);
-            updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
-                connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-        };
-        
-        const originalErrorHandler = (error) => {
-            clearTimeout(connectionAttemptTimeout);
-            console.error('Connection Error:', error);
-            connections.delete(validatedPeerId);
-            updateConnectionStatus('', 'Connection failed');
-            showNotification('Failed to connect to peer', 'error');
-        };
-        
-        newConnection.on('open', originalOpenHandler);
-        newConnection.on('close', originalCloseHandler);
-        newConnection.on('error', originalErrorHandler);
-        
-        // Set up data handling
-        setupConnectionDataHandlers(newConnection);
-        
+        connections.set(remotePeerIdValue, newConnection);
+        setupConnectionHandlers(newConnection);
     } catch (error) {
         console.error('Connection attempt error:', error);
         showNotification('Failed to establish connection', 'error');
@@ -1685,19 +1524,6 @@ function checkConnections() {
 function reconnectToPeer(peerId) {
     try {
         console.log(`Attempting to reconnect to peer: ${peerId}`);
-        
-        // Check if connection already exists and is open
-        const existingConn = connections.get(peerId);
-        if (existingConn && existingConn.open) {
-            console.log(`Connection to ${peerId} already exists and is open`);
-            return;
-        }
-        
-        // Remove existing connection if it exists but is closed
-        if (existingConn) {
-            connections.delete(peerId);
-        }
-        
         const newConnection = peer.connect(peerId, {
             reliable: true
         });
@@ -1990,28 +1816,6 @@ function initPeerIdEditing() {
             }
         });
     }
-}
-
-// Validate and clean peer ID
-function validatePeerId(peerId) {
-    if (!peerId || typeof peerId !== 'string') {
-        return null;
-    }
-    
-    // Remove whitespace and special characters that might cause issues
-    const cleaned = peerId.trim().replace(/[^a-zA-Z0-9-_]/g, '');
-    
-    // Check length
-    if (cleaned.length < 3 || cleaned.length > 50) {
-        return null;
-    }
-    
-    return cleaned;
-}
-
-// Function to check if peer is available
-function isPeerAvailable(peerId) {
-    return peer && peer.id && peer.id !== peerId && !peer.destroyed && !peer.disconnected;
 }
 
 init();

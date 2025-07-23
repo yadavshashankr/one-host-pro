@@ -1014,6 +1014,19 @@ updateProgress = function(progress) {
     }
 };
 
+// Update progress bar
+function updateProgress(percent) {
+    const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
+    elements.progress.style.width = `${progress}%`;
+    elements.transferInfo.style.display = 'block';
+    // Only hide transfer info when transfer is complete and progress is 100%
+    if (progress === 100) {
+        setTimeout(() => {
+            elements.transferInfo.style.display = 'none';
+        }, 1000); // Keep the 100% visible briefly
+    }
+}
+
 // UI Functions
 function addFileToList(name, url, size) {
     const li = document.createElement('li');

@@ -1,0 +1,26 @@
+{
+  "name": "One-Host",
+  "short_name": "One-Host",
+  "description": "Secure P2P File Sharing via WebRTC.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#2196F3",
+  "theme_color": "#2196F3",
+  "icons": [
+    {
+      "src": "assets/favicon/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/favicon/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/tablogo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+} 

@@ -94,7 +94,7 @@ const downloadProgressMap = new Map(); // fileId -> { button, percent }
 const originalUpdateFilesList = updateFilesList;
 updateFilesList = function(listElement, fileInfo, type) {
     originalUpdateFilesList(listElement, fileInfo, type);
-    if (type === 'received') {
+    if (type === 'received' || type === 'sent') {
         const li = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
         if (li) {
             const downloadBtn = li.querySelector('.icon-button');
@@ -102,6 +102,8 @@ updateFilesList = function(listElement, fileInfo, type) {
                 downloadBtn.setAttribute('data-file-id', fileInfo.id);
             }
         }
+        // Scroll to bottom after adding
+        listElement.scrollTop = listElement.scrollHeight;
     }
 };
 
@@ -125,7 +127,7 @@ updateProgress = function(progress, fileId) {
         const entry = downloadProgressMap.get(fileId);
         const percent = Math.floor(progress);
         if (entry.percent !== percent) {
-            entry.button.innerHTML = percent + '%';
+            entry.button.innerHTML = `<span class='download-progress-text'>${percent}%</span>`;
             entry.percent = percent;
         }
     }

@@ -370,6 +370,13 @@ input[type="file"] {
     font-size: 20px;
 }
 
+.download-progress-text {
+    color: var(--primary-color);
+    font-weight: bold;
+    font-family: monospace;
+    font-size: 1rem;
+}
+
 /* Files sections */
 .files-section {
     background: var(--card-background);

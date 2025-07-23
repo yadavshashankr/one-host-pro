@@ -84,6 +84,33 @@ const MAX_RECENT_PEERS = 5;
 let fileQueue = [];
 let isProcessingQueue = false;
 
+// --- Progress Notification Helper ---
+let lastProgressPercent = null;
+let progressNotification = null;
+
+function showProgressNotification(percent) {
+    const rounded = Math.floor(percent);
+    if (lastProgressPercent === rounded) return;
+    lastProgressPercent = rounded;
+    // Remove previous notification if exists
+    if (progressNotification) {
+        progressNotification.remove();
+        progressNotification = null;
+    }
+    progressNotification = document.createElement('div');
+    progressNotification.className = 'notification info';
+    progressNotification.textContent = `File transfer in progress: ${rounded}%`;
+    elements.notifications.appendChild(progressNotification);
+}
+
+function clearProgressNotification() {
+    if (progressNotification) {
+        progressNotification.remove();
+        progressNotification = null;
+    }
+    lastProgressPercent = null;
+}
+
 // Load recent peers from localStorage
 function loadRecentPeers() {
     try {
@@ -977,19 +1004,15 @@ async function sendFile(file) {
     }
 }
 
-// Update progress bar
-function updateProgress(percent) {
-    const progress = Math.min(Math.floor(percent), 100); // Ensure integer value and cap at 100
-    elements.progress.style.width = `${progress}%`;
-    elements.transferInfo.style.display = 'block';
-    
-    // Only hide transfer info when transfer is complete and progress is 100%
-    if (progress === 100) {
-        setTimeout(() => {
-            elements.transferInfo.style.display = 'none';
-        }, 1000); // Keep the 100% visible briefly
+// --- Patch updateProgress to show notification ---
+const originalUpdateProgress = updateProgress;
+updateProgress = function(progress) {
+    showProgressNotification(progress);
+    originalUpdateProgress(progress);
+    if (progress >= 100) {
+        setTimeout(clearProgressNotification, 1000);
     }
-}
+};
 
 // UI Functions
 function addFileToList(name, url, size) {

@@ -477,12 +477,26 @@ function initPeerJS() {
         // Create new peer with auto-generated ID
         peer = new Peer({
             debug: 2,
+            host: 'peerjs-server.herokuapp.com',
+            port: 443,
+            path: '/',
+            secure: true,
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' },
                     {
                         urls: 'turn:openrelay.metered.ca:80',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
                         username: 'openrelayproject',
                         credential: 'openrelayproject'
                     }
@@ -1235,19 +1249,87 @@ elements.connectButton.addEventListener('click', () => {
         return;
     }
 
-    if (connections.has(remotePeerIdValue)) {
+    // Validate and clean the peer ID
+    const validatedPeerId = validatePeerId(remotePeerIdValue);
+    if (!validatedPeerId) {
+        showNotification('Invalid Peer ID format. Use only letters, numbers, hyphens, and underscores (3-50 characters)', 'error');
+        return;
+    }
+
+    if (connections.has(validatedPeerId)) {
         showNotification('Already connected to this peer', 'warning');
         return;
     }
 
+    // Check if our peer is ready
+    if (!isPeerAvailable(validatedPeerId)) {
+        showNotification('Please wait for your peer to be ready', 'error');
+        return;
+    }
+
     try {
-        console.log('Attempting to connect to:', remotePeerIdValue);
+        console.log('Attempting to connect to:', validatedPeerId);
         updateConnectionStatus('connecting', 'Connecting...');
-        const newConnection = peer.connect(remotePeerIdValue, {
-            reliable: true
+        
+        // Set a timeout for the connection attempt
+        const connectionAttemptTimeout = setTimeout(() => {
+            if (connections.has(validatedPeerId)) {
+                const conn = connections.get(validatedPeerId);
+                if (!conn.open) {
+                    console.log('Connection attempt timed out');
+                    connections.delete(validatedPeerId);
+                    updateConnectionStatus('', 'Connection timeout');
+                    showNotification('Connection attempt timed out', 'error');
+                }
+            }
+        }, 15000); // 15 second timeout
+
+        const newConnection = peer.connect(validatedPeerId, {
+            reliable: true,
+            serialization: 'json'
         });
-        connections.set(remotePeerIdValue, newConnection);
-        setupConnectionHandlers(newConnection);
+        
+        connections.set(validatedPeerId, newConnection);
+        
+        // Set up connection handlers with timeout cleanup
+        const originalOpenHandler = () => {
+            clearTimeout(connectionAttemptTimeout);
+            console.log('Connection opened with:', validatedPeerId);
+            isConnectionReady = true;
+            updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+            elements.fileTransferSection.classList.remove('hidden');
+            addRecentPeer(validatedPeerId);
+            
+            // Send a connection notification to the other peer
+            newConnection.send({
+                type: 'connection-notification',
+                peerId: peer.id
+            });
+        };
+        
+        const originalCloseHandler = () => {
+            clearTimeout(connectionAttemptTimeout);
+            console.log('Connection closed with:', validatedPeerId);
+            connections.delete(validatedPeerId);
+            updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+                connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
+        };
+        
+        const originalErrorHandler = (error) => {
+            clearTimeout(connectionAttemptTimeout);
+            console.error('Connection Error:', error);
+            connections.delete(validatedPeerId);
+            updateConnectionStatus('', 'Connection failed');
+            showNotification('Failed to connect to peer', 'error');
+        };
+        
+        newConnection.on('open', originalOpenHandler);
+        newConnection.on('close', originalCloseHandler);
+        newConnection.on('error', originalErrorHandler);
+        
+        // Set up data handling
+        setupConnectionDataHandlers(newConnection);
+        
     } catch (error) {
         console.error('Connection attempt error:', error);
         showNotification('Failed to establish connection', 'error');
@@ -1908,6 +1990,28 @@ function initPeerIdEditing() {
             }
         });
     }
+}
+
+// Validate and clean peer ID
+function validatePeerId(peerId) {
+    if (!peerId || typeof peerId !== 'string') {
+        return null;
+    }
+    
+    // Remove whitespace and special characters that might cause issues
+    const cleaned = peerId.trim().replace(/[^a-zA-Z0-9-_]/g, '');
+    
+    // Check length
+    if (cleaned.length < 3 || cleaned.length > 50) {
+        return null;
+    }
+    
+    return cleaned;
+}
+
+// Function to check if peer is available
+function isPeerAvailable(peerId) {
+    return peer && peer.id && peer.id !== peerId && !peer.destroyed && !peer.disconnected;
 }
 
 init();

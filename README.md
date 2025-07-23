@@ -19,6 +19,14 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 - 🎨 Visual download status indicators
 - 🔍 Quick file access after download
 
+## 🏗️ Architecture
+
+- **Modular Design**: Clean separation of concerns with dedicated service modules
+- **Scalable Structure**: Easy to extend and maintain with organized codebase
+- **Service-Oriented**: Independent services for storage, notifications, and peer management
+- **Type-Safe**: Comprehensive utility functions and DOM management
+- **Performance Optimized**: Efficient file handling and connection management
+
 ## 🚀 Getting Started
 
 1. Open the application in your browser
@@ -121,17 +129,12 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 
 ## 🌟 Recent Updates
 
-- Enhanced download completion indicators
-- Quick file access after download
-- Visual status feedback improvements
-- Direct peer-to-peer file downloads
-- Improved connection stability
-- Better error handling
-- Enhanced progress tracking
-- File history persistence
-- Recent peers functionality
-- QR code connection option
-- Mobile optimization
+- **Modular Architecture**: Complete codebase restructuring for better maintainability
+- **Service Layer**: Dedicated services for storage, notifications, and peer management
+- **Enhanced Download Indicators**: Visual progress tracking and completion feedback
+- **Direct File Downloads**: Optimized peer-to-peer file transfer
+- **Improved Connection Stability**: Better error handling and recovery
+- **Mobile Optimization**: Enhanced mobile experience and responsiveness
 
 ## 📝 Notes
 

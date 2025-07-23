@@ -1103,9 +1103,13 @@ elements.connectButton.addEventListener('click', () => {
     }
 });
 
+// Add Enter key support for connecting to peer
 elements.remotePeerId.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
         elements.connectButton.click();
+        if (elements.recentPeers) {
+            elements.recentPeers.classList.add('hidden');
+        }
     }
 });
 

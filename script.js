@@ -84,32 +84,67 @@ const MAX_RECENT_PEERS = 5;
 let fileQueue = [];
 let isProcessingQueue = false;
 
-// --- Progress Notification Helper ---
-let lastProgressPercent = null;
-let progressNotification = null;
+// --- Remove notification-based progress ---
+// Remove showProgressNotification, clearProgressNotification, and patch of updateProgress
 
-function showProgressNotification(percent) {
-    const rounded = Math.floor(percent);
-    if (lastProgressPercent === rounded) return;
-    lastProgressPercent = rounded;
-    // Remove previous notification if exists
-    if (progressNotification) {
-        progressNotification.remove();
-        progressNotification = null;
-    }
-    progressNotification = document.createElement('div');
-    progressNotification.className = 'notification info';
-    progressNotification.textContent = `File transfer in progress: ${rounded}%`;
-    elements.notifications.appendChild(progressNotification);
-}
+// --- Download progress per file ---
+const downloadProgressMap = new Map(); // fileId -> { button, percent }
 
-function clearProgressNotification() {
-    if (progressNotification) {
-        progressNotification.remove();
-        progressNotification = null;
+// Patch updateFilesList to mark download buttons for received files
+const originalUpdateFilesList = updateFilesList;
+updateFilesList = function(listElement, fileInfo, type) {
+    originalUpdateFilesList(listElement, fileInfo, type);
+    if (type === 'received') {
+        const li = listElement.querySelector(`[data-file-id="${fileInfo.id}"]`);
+        if (li) {
+            const downloadBtn = li.querySelector('.icon-button');
+            if (downloadBtn) {
+                downloadBtn.setAttribute('data-file-id', fileInfo.id);
+            }
+        }
     }
-    lastProgressPercent = null;
-}
+};
+
+// Patch requestAndDownloadBlob to set up progress UI
+const originalRequestAndDownloadBlob = requestAndDownloadBlob;
+requestAndDownloadBlob = async function(fileInfo) {
+    const fileId = fileInfo.id;
+    const btn = document.querySelector(`button.icon-button[data-file-id="${fileId}"]`);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '0%';
+        downloadProgressMap.set(fileId, { button: btn, percent: 0 });
+    }
+    await originalRequestAndDownloadBlob(fileInfo);
+};
+
+// Patch updateProgress to update button percentage for downloads
+const originalUpdateProgress = updateProgress;
+updateProgress = function(progress, fileId) {
+    if (fileId && downloadProgressMap.has(fileId)) {
+        const entry = downloadProgressMap.get(fileId);
+        const percent = Math.floor(progress);
+        if (entry.percent !== percent) {
+            entry.button.innerHTML = percent + '%';
+            entry.percent = percent;
+        }
+    }
+    originalUpdateProgress(progress);
+};
+
+// Patch handleFileComplete to swap to open file icon and enable open
+const originalHandleFileComplete = handleFileComplete;
+handleFileComplete = async function(data) {
+    await originalHandleFileComplete(data);
+    const fileId = data.fileId;
+    if (downloadProgressMap.has(fileId)) {
+        const entry = downloadProgressMap.get(fileId);
+        entry.button.disabled = false;
+        entry.button.innerHTML = '<span class="material-icons">open_in_new</span>';
+        // The open logic is already set in downloadBlob
+        downloadProgressMap.delete(fileId);
+    }
+};
 
 // Load recent peers from localStorage
 function loadRecentPeers() {
@@ -557,7 +592,7 @@ async function handleFileChunk(data) {
     // Update progress more smoothly (update every 1% change)
     const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
     if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress);
+        updateProgress(currentProgress, data.fileId);
         fileData.lastProgressUpdate = currentProgress;
     }
 }
@@ -739,7 +774,7 @@ async function handleBlobRequest(data, conn) {
             // Update progress
             const currentProgress = (offset / blob.size) * 100;
             if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress);
+                updateProgress(currentProgress, fileId);
                 lastProgressUpdate = currentProgress;
             }
         }
@@ -800,7 +835,7 @@ async function requestAndDownloadBlob(fileInfo) {
 
         // Now we should have a direct connection to the sender
         elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
+        updateProgress(0, fileInfo.id);
         updateTransferInfo(`Requesting ${fileInfo.name} directly from sender...`);
 
         // Request the file directly
@@ -1005,14 +1040,14 @@ async function sendFile(file) {
 }
 
 // --- Patch updateProgress to show notification ---
-const originalUpdateProgress = updateProgress;
-updateProgress = function(progress) {
-    showProgressNotification(progress);
-    originalUpdateProgress(progress);
-    if (progress >= 100) {
-        setTimeout(clearProgressNotification, 1000);
-    }
-};
+// const originalUpdateProgress = updateProgress;
+// updateProgress = function(progress) {
+//     showProgressNotification(progress);
+//     originalUpdateProgress(progress);
+//     if (progress >= 100) {
+//         setTimeout(clearProgressNotification, 1000);
+//     }
+// };
 
 // Update progress bar
 function updateProgress(percent) {

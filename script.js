@@ -1103,6 +1103,12 @@ elements.connectButton.addEventListener('click', () => {
     }
 });
 
+elements.remotePeerId.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        elements.connectButton.click();
+    }
+});
+
 elements.dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     elements.dropZone.classList.add('drag-over');

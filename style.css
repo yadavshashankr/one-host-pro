@@ -547,8 +547,11 @@ input[type="file"] {
     background: var(--background-color);
     color: var(--text-color);
     width: 100%;
-    max-width: 200px;
+    max-width: 100%;
+    min-width: 200px;
     font-family: monospace;
+    box-sizing: border-box;
+    overflow-x: auto;
 }
 
 .peer-id-edit.hidden {

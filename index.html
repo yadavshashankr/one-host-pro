@@ -72,6 +72,8 @@
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <!-- QR Code generation -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Add html5-qrcode CDN for QR scanning -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
   <!-- Material Icons -->
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 </head>
@@ -113,8 +115,16 @@
               </button>
             </div>
           </div>
-          <div id="qrcode-container">
-            <div id="qrcode"></div>
+          <div id="qrcode-container" style="position: relative; display: inline-block; cursor: pointer;">
+            <div id="qrcode" style="position: relative;"></div>
+            <span id="qrcode-camera-icon" style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(255,255,255,0.7); border-radius: 50%; padding: 8px; display: flex; align-items: center; justify-content: center; pointer-events: none;">
+              <span class="material-icons" style="font-size: 32px; color: #2196F3; opacity: 0.85;">photo_camera</span>
+            </span>
+          </div>
+          <!-- QR Scanner Modal -->
+          <div id="qr-scanner-modal" class="hidden" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 2000; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+            <div id="qr-scanner" style="width: 320px; max-width: 90vw;"></div>
+            <button id="close-qr-scanner" class="button" style="margin-top: 16px;">Close</button>
           </div>
         </div>
 

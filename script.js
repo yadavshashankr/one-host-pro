@@ -1835,15 +1835,23 @@ function initPeerIdEditing() {
 
 // Helper: Show browser notification for received files
 function showBrowserNotification(title, body) {
-    if (!('Notification' in window)) return;
+    console.log('[Notification] Attempting to show notification:', { title, body, permission: Notification.permission });
+    if (!('Notification' in window)) {
+        console.log('[Notification] Notification API not supported in this browser.');
+        return;
+    }
     if (Notification.permission === 'granted') {
+        console.log('[Notification] Permission granted. Showing notification.');
         new Notification(title, { body });
     } else if (Notification.permission !== 'denied') {
         Notification.requestPermission().then(permission => {
+            console.log('[Notification] Permission requested. Result:', permission);
             if (permission === 'granted') {
                 new Notification(title, { body });
             }
         });
+    } else {
+        console.log('[Notification] Permission denied. No notification will be shown.');
     }
 }
 

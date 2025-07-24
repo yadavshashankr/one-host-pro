@@ -2,3 +2,6 @@
 .idea/
 # Ignore macOS metadata files
 .DS_Store
+
+IMPLEMENTATION_GUIDE.md
+MODULARIZATION_PLAN.md

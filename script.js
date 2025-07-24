@@ -1186,6 +1186,16 @@ elements.remotePeerId.addEventListener('keypress', (e) => {
     }
 });
 
+// Add keydown event support for connecting to peer (for mobile compatibility)
+elements.remotePeerId.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        elements.connectButton.click();
+        if (elements.recentPeers) {
+            elements.recentPeers.classList.add('hidden');
+        }
+    }
+});
+
 elements.dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     elements.dropZone.classList.add('drag-over');

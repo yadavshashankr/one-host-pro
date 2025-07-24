@@ -1,4 +1,2 @@
-/.idea/misc.xml
-/one-host.iml
-/.idea
-/.idea/modules.xml
+# Ignore JetBrains IDE settings
+.idea/

@@ -921,13 +921,6 @@ function addFileToHistory(fileInfo, type) {
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
 
-    // Show browser notification for received files
-    if (actualType === 'received') {
-        showBrowserNotification(
-            'File Received',
-            `Received "${fileInfo.name}" from ${fileInfo.sharedBy || 'a peer'}`
-        );
-    }
     // Only broadcast updates for files we send originally
     if (fileInfo.sharedBy === peer.id) {
         broadcastFileUpdate(fileInfo);
@@ -1833,42 +1826,4 @@ function initPeerIdEditing() {
     }
 }
 
-// Helper: Show browser notification for received files
-function showBrowserNotification(title, body) {
-    console.log('[Notification] Attempting to show notification:', { title, body, permission: Notification.permission });
-    if (!('Notification' in window)) {
-        console.log('[Notification] Notification API not supported in this browser.');
-        return;
-    }
-    if (Notification.permission === 'granted') {
-        console.log('[Notification] Permission granted. Showing notification.');
-        new Notification(title, { body });
-    } else if (Notification.permission !== 'denied') {
-        Notification.requestPermission().then(permission => {
-            console.log('[Notification] Permission requested. Result:', permission);
-            if (permission === 'granted') {
-                new Notification(title, { body });
-            }
-        });
-    } else {
-        console.log('[Notification] Permission denied. No notification will be shown.');
-    }
-}
-
-// Request notification permission on page load
-if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission().then(function(permission) {
-        console.log('Notification permission:', permission);
-    });
-}
-
 init();
-
-// Register service worker for PWA/offline support
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/service-worker.js')
-      .then(reg => console.log('Service Worker registered:', reg))
-      .catch(err => console.log('Service Worker registration failed:', err));
-  });
-}

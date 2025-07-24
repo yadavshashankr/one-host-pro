@@ -578,7 +578,7 @@ async function handleFileHeader(data) {
         receivedSize: 0,
         originalSender: data.originalSender
     };
-    elements.transferProgress.classList.remove('hidden');
+    elements.transferProgress.classList.add('hidden'); // Always hide
     updateProgress(0);
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
 }
@@ -986,7 +986,7 @@ async function sendFile(file) {
 
     try {
         transferInProgress = true;
-        elements.transferProgress.classList.remove('hidden');
+        elements.transferProgress.classList.add('hidden'); // Always hide
         updateProgress(0);
         updateTransferInfo(`Sending ${file.name}...`);
 
@@ -1034,7 +1034,7 @@ async function sendFile(file) {
         throw error; // Propagate error for queue processing
     } finally {
         transferInProgress = false;
-        elements.transferProgress.classList.add('hidden');
+        elements.transferProgress.classList.add('hidden'); // Always hide
         updateProgress(0);
         // Process next file in queue if any
         processFileQueue();
@@ -1254,6 +1254,7 @@ function init() {
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
     initPeerIdEditing(); // Initialize peer ID editing
+    elements.transferProgress.classList.add('hidden'); // Always hide transfer bar
 }
 
 // Add CSS classes for notification styling

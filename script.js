@@ -1379,6 +1379,13 @@ function updateFilesList(listElement, fileInfo, type) {
         listElement.appendChild(li);
     }
     
+    // Scroll the new received file into view
+    if (type === 'received') {
+        setTimeout(() => {
+            li.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+    }
+    
     console.log('File list updated successfully');
 }
 

@@ -331,7 +331,7 @@ class OneHostApp {
         }
 
         if (this.state.connections.has(validatedPeerId)) {
-            notificationService.warning('Already connected to this peer');
+            // notificationService.warning('Already connected to this peer'); // Suppressed as per user request
             return;
         }
 

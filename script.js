@@ -1157,7 +1157,7 @@ elements.connectButton.addEventListener('click', () => {
     }
 
     if (connections.has(remotePeerIdValue)) {
-        showNotification('Already connected to this peer', 'warning');
+        // showNotification('Already connected to this peer', 'warning'); // Suppressed as per user request
         return;
     }
 

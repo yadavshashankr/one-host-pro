@@ -1847,6 +1847,13 @@ function showBrowserNotification(title, body) {
     }
 }
 
+// Request notification permission on page load
+if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(function(permission) {
+        console.log('Notification permission:', permission);
+    });
+}
+
 init();
 
 // Register service worker for PWA/offline support

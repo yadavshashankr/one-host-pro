@@ -662,7 +662,7 @@ async function handleFileComplete(data) {
         showNotification('Error processing file: ' + error.message, 'error');
     } finally {
         delete fileChunks[data.fileId];
-        elements.transferProgress.classList.add('hidden');
+        elements.transferProgress.classList.add('hidden'); // Ensure it's hidden
         updateProgress(0);
         updateTransferInfo('');
     }
@@ -836,9 +836,9 @@ async function requestAndDownloadBlob(fileInfo) {
         }
 
         // Now we should have a direct connection to the sender
-        elements.transferProgress.classList.remove('hidden');
+        elements.transferProgress.classList.add('hidden'); // Hide the progress bar
         updateProgress(0, fileInfo.id);
-        updateTransferInfo(`Requesting ${fileInfo.name} directly from sender...`);
+        updateTransferInfo('');
 
         // Request the file directly
         conn.send({

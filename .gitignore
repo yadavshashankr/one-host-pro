@@ -1,2 +1,4 @@
 # Ignore JetBrains IDE settings
 .idea/
+# Ignore macOS metadata files
+.DS_Store

@@ -921,6 +921,13 @@ function addFileToHistory(fileInfo, type) {
     const listElement = actualType === 'sent' ? elements.sentFilesList : elements.receivedFilesList;
     updateFilesList(listElement, fileInfo, actualType);
 
+    // Show browser notification for received files
+    if (actualType === 'received') {
+        showBrowserNotification(
+            'File Received',
+            `Received "${fileInfo.name}" from ${fileInfo.sharedBy || 'a peer'}`
+        );
+    }
     // Only broadcast updates for files we send originally
     if (fileInfo.sharedBy === peer.id) {
         broadcastFileUpdate(fileInfo);
@@ -1821,6 +1828,20 @@ function initPeerIdEditing() {
                 saveEditedPeerId();
             } else if (e.key === 'Escape') {
                 cancelEditingPeerId();
+            }
+        });
+    }
+}
+
+// Helper: Show browser notification for received files
+function showBrowserNotification(title, body) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+        new Notification(title, { body });
+    } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+                new Notification(title, { body });
             }
         });
     }

@@ -1183,6 +1183,7 @@ elements.remotePeerId.addEventListener('keypress', (e) => {
         if (elements.recentPeers) {
             elements.recentPeers.classList.add('hidden');
         }
+        elements.remotePeerId.blur(); // Dismiss keyboard
     }
 });
 
@@ -1193,6 +1194,7 @@ elements.remotePeerId.addEventListener('keydown', (e) => {
         if (elements.recentPeers) {
             elements.recentPeers.classList.add('hidden');
         }
+        elements.remotePeerId.blur(); // Dismiss keyboard
     }
 });
 

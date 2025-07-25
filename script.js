@@ -189,11 +189,7 @@ function updateRecentPeersList() {
     elements.recentPeersList.innerHTML = '';
     recentPeers.forEach(peerId => {
         const li = document.createElement('li');
-        const icon = document.createElement('span');
-        icon.className = 'material-icons';
-        icon.textContent = 'person';
-        li.appendChild(icon);
-        li.appendChild(document.createTextNode(peerId));
+        li.textContent = peerId;
         li.onclick = () => {
             elements.remotePeerId.value = peerId;
             elements.recentPeers.classList.add('hidden');
@@ -1024,7 +1020,7 @@ async function sendFile(file) {
         }
 
         if (successCount > 0) {
-            showNotification(`${file.name} sent successfully to ${successCount} peer(s)${errors.length > 0 ? ' with some errors' : ''}`, 'success');
+            showNotification(`${file.name} sent successfully`, 'success');
         } else {
             throw new Error('Failed to send file to any peers: ' + errors.join(', '));
         }

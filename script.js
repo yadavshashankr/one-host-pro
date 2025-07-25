@@ -521,7 +521,7 @@ function setupConnectionHandlers(conn) {
             }
         } catch (error) {
             console.error('Data handling error:', error);
-            showNotification('Error processing received data', 'error');
+            // Suppressed error notification as per user request
         }
     });
 

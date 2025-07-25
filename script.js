@@ -1582,8 +1582,7 @@ function downloadBlob(blob, fileName, fileId) {
                     // Try to open in a new tab with security features
                     const newWindow = window.open(openUrl, '_blank', 'noopener,noreferrer');
                     if (!newWindow) {
-                        // Fallback: set location if popup blocked
-                        window.location.href = openUrl;
+                        showNotification('Popup blocked! Please allow popups to open the file.', 'warning');
                     }
                     setTimeout(() => URL.revokeObjectURL(openUrl), 2000); // Revoke after use
                 };

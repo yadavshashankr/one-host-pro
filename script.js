@@ -1579,7 +1579,13 @@ function downloadBlob(blob, fileName, fileId) {
                 // Store the blob URL for opening the file
                 const openUrl = URL.createObjectURL(blob);
                 downloadButton.onclick = () => {
-                    window.open(openUrl, '_blank');
+                    // Try to open in a new tab with security features
+                    const newWindow = window.open(openUrl, '_blank', 'noopener,noreferrer');
+                    if (!newWindow) {
+                        // Fallback: set location if popup blocked
+                        window.location.href = openUrl;
+                    }
+                    setTimeout(() => URL.revokeObjectURL(openUrl), 2000); // Revoke after use
                 };
             }
         }

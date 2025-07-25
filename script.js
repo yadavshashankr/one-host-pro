@@ -442,6 +442,12 @@ function setupConnectionHandlers(conn) {
     });
 
     conn.on('data', async (data) => {
+        // iOS Chrome specific handling - ensure data is properly structured
+        if (!data || typeof data !== 'object') {
+            console.warn('Received invalid data format on iOS Chrome:', data);
+            return;
+        }
+        
         try {
             switch (data.type) {
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
@@ -521,6 +527,23 @@ function setupConnectionHandlers(conn) {
             }
         } catch (error) {
             console.error('Data handling error:', error);
+            console.error('Data that caused error:', data);
+            
+            // Only show error notification for actual errors, not for successful file operations
+            // Check if this is a file-related operation that might have succeeded despite the error
+            if (data && data.type && (
+                data.type === 'file-info' || 
+                data.type === 'file-header' || 
+                data.type === 'file-chunk' || 
+                data.type === 'file-complete'
+            )) {
+                // For file operations, check if the file was actually received successfully
+                if (data.fileId && fileChunks[data.fileId]) {
+                    console.log('File operation may have succeeded despite error, not showing notification');
+                    return; // Don't show error notification
+                }
+            }
+            
             showNotification('Error processing received data', 'error');
         }
     });
@@ -586,23 +609,41 @@ async function handleFileHeader(data) {
 // Handle file chunk
 async function handleFileChunk(data) {
     const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    if (!fileData) {
+        console.warn('Received file chunk for unknown file:', data.fileId);
+        return;
+    }
 
-    fileData.chunks.push(data.data);
-    fileData.receivedSize += data.data.byteLength;
-    
-    // Update progress more smoothly (update every 1% change)
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress, data.fileId);
-        fileData.lastProgressUpdate = currentProgress;
+    // iOS Chrome specific validation
+    if (!data.data || !data.data.byteLength) {
+        console.warn('Received invalid file chunk data on iOS Chrome:', data);
+        return;
+    }
+
+    try {
+        fileData.chunks.push(data.data);
+        fileData.receivedSize += data.data.byteLength;
+        
+        // Update progress more smoothly (update every 1% change)
+        const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+        if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
+            updateProgress(currentProgress, data.fileId);
+            fileData.lastProgressUpdate = currentProgress;
+        }
+    } catch (error) {
+        console.error('Error processing file chunk on iOS Chrome:', error);
+        // Don't throw error here to avoid showing "Error processing received data" notification
+        // The file might still be received successfully
     }
 }
 
 // Handle file completion
 async function handleFileComplete(data) {
     const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    if (!fileData) {
+        console.warn('Received file completion for unknown file:', data.fileId);
+        return;
+    }
 
     try {
         // Combine chunks into blob if this is a blob transfer

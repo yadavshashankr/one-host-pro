@@ -1,15 +1,15 @@
 const CACHE_NAME = 'one-host-cache-v1';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/script.js',
-  '/manifest.json',
-  '/assets/logo.svg',
-  '/assets/tablogo.png',
-  '/assets/favicon/favicon-32x32.png',
-  '/assets/favicon/favicon-16x16.png',
-  '/assets/favicon/apple-touch-icon.png'
+  './',
+  './index.html',
+  './style.css',
+  './script.js',
+  './manifest.json',
+  './assets/logo.svg',
+  './assets/tablogo.png',
+  './assets/favicon/favicon-32x32.png',
+  './assets/favicon/favicon-16x16.png',
+  './assets/favicon/apple-touch-icon.png'
 ];
 
 // Install event: cache essential files

@@ -1,10 +1,10 @@
-// Constants
-const CHUNK_SIZE = 16384; // 16KB chunks
-const DB_NAME = 'fileTransferDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'files';
-const KEEP_ALIVE_INTERVAL = 30000; // 30 seconds
-const CONNECTION_TIMEOUT = 60000; // 60 seconds
+// Constants - now imported from config
+const CHUNK_SIZE = window.CONFIG?.CHUNK_SIZE || 16384;
+const DB_NAME = window.CONFIG?.DB_NAME || 'fileTransferDB';
+const DB_VERSION = window.CONFIG?.DB_VERSION || 1;
+const STORE_NAME = window.CONFIG?.STORE_NAME || 'files';
+const KEEP_ALIVE_INTERVAL = window.CONFIG?.KEEP_ALIVE_INTERVAL || 30000;
+const CONNECTION_TIMEOUT = window.CONFIG?.CONNECTION_TIMEOUT || 60000;
 
 // Add simultaneous download message types
 const MESSAGE_TYPES = {
@@ -240,7 +240,7 @@ function generateQRCode(peerId) {
         elements.qrcode.innerHTML = ''; // Clear previous QR code
         
         // Generate URL with peer ID as query parameter
-        const baseUrl = window.location.origin + window.location.pathname;
+        const baseUrl = window.CONFIG?.BASE_URL || (window.location.origin + window.location.pathname);
         const qrUrl = `${baseUrl}?peer=${peerId}`;
         
         new QRCode(elements.qrcode, {
@@ -291,7 +291,7 @@ function initShareButton() {
 async function shareId() {
     try {
         const peerId = elements.peerId.textContent;
-        const baseUrl = 'https://one-host.app/';
+        const baseUrl = window.CONFIG?.BASE_URL || 'https://one-host.app/';
         const qrUrl = `${baseUrl}?peer=${peerId}`;
         await navigator.share({ url: qrUrl });
         showNotification('Share successful!', 'success');

@@ -22,27 +22,27 @@
 
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://one-host.app/">
+  <meta property="og:url" id="og-url" content="">
   <meta property="og:site_name" content="One-Host">
   <meta property="og:title" content="One-Host - Secure P2P File Sharing">
   <meta property="og:description" content="Share files instantly and securely between devices using One-Host's peer-to-peer WebRTC technology. No server required!">
   <!-- Primary og:image for WhatsApp -->
-  <meta property="og:image" content="https://one-host.app/assets/linkedin-og.jpeg?v=2">
+  <meta property="og:image" id="og-image-whatsapp" content="">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="400">
   <meta property="og:image:height" content="400">
   <!-- Secondary og:image for other platforms -->
-  <meta property="og:image" content="https://one-host.app/assets/og.png">
+  <meta property="og:image" id="og-image-main" content="">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="One-Host - P2P File Sharing Application">
   <meta property="og:locale" content="en_US">
-  <meta property="og:image" content="https://one-host.app/assets/og-whatsapp.png">
+  <meta property="og:image" id="og-image-whatsapp-alt" content="">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="400">
   <meta property="og:image:height" content="400">
-  <meta property="og:image" content="https://one-host.app/assets/og.png">
+  <meta property="og:image" id="og-image-main-alt" content="">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -50,10 +50,10 @@
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://one-host.app/">
+  <meta name="twitter:url" id="twitter-url" content="">
   <meta name="twitter:title" content="One-Host - Secure P2P File Sharing">
   <meta name="twitter:description" content="Share files instantly and securely between devices using One-Host's peer-to-peer WebRTC technology. No server required!">
-  <meta name="twitter:image" content="https://one-host.app/assets/og.png">
+  <meta name="twitter:image" id="twitter-image" content="">
   <meta name="twitter:image:alt" content="One-Host - P2P File Sharing Application">
   
   <!-- Cache Control -->
@@ -68,6 +68,26 @@
 
   <link rel="stylesheet" href="style.css" />
   <link rel="manifest" href="manifest.json">
+  <!-- Configuration -->
+  <script src="js/config/constants.js"></script>
+  <!-- Dynamic Meta Tags -->
+  <script>
+    // Update meta tags based on environment
+    document.addEventListener('DOMContentLoaded', function() {
+      const baseUrl = window.CONFIG?.BASE_URL || 'https://one-host.app/';
+      
+      // Update Open Graph URLs
+      document.getElementById('og-url').setAttribute('content', baseUrl);
+      document.getElementById('og-image-whatsapp').setAttribute('content', baseUrl + 'assets/linkedin-og.jpeg?v=2');
+      document.getElementById('og-image-main').setAttribute('content', baseUrl + 'assets/og.png');
+      document.getElementById('og-image-whatsapp-alt').setAttribute('content', baseUrl + 'assets/og-whatsapp.png');
+      document.getElementById('og-image-main-alt').setAttribute('content', baseUrl + 'assets/og.png');
+      
+      // Update Twitter URLs
+      document.getElementById('twitter-url').setAttribute('content', baseUrl);
+      document.getElementById('twitter-image').setAttribute('content', baseUrl + 'assets/og.png');
+    });
+  </script>
   <!-- PeerJS for WebRTC -->
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <!-- QR Code generation -->

@@ -1,7 +1,20 @@
 # Ignore JetBrains IDE settings
 .idea/
+
 # Ignore macOS metadata files
 .DS_Store
 
+# Development and build files
+package.json
+package-lock.json
+node_modules/
+switch-env.js
+deploy.sh
+ENVIRONMENT_SWITCHING.md
+
+# Documentation files (keep only README.md and LICENSE)
 IMPLEMENTATION_GUIDE.md
 MODULARIZATION_PLAN.md
+
+# Environment-specific files (these will be generated during deployment)
+# Note: CNAME is kept in repo as it's needed for GitHub Pages

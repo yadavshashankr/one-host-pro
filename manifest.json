@@ -2,7 +2,7 @@
   "name": "One-Host",
   "short_name": "One-Host",
   "description": "Secure P2P File Sharing via WebRTC.",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#2196F3",
   "theme_color": "#2196F3",

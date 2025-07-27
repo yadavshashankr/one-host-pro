@@ -468,7 +468,7 @@ class OneHostApp {
             dom.clear('qrcode');
             
             // Generate URL with peer ID as query parameter
-            const baseUrl = window.location.origin + window.location.pathname;
+            const baseUrl = window.CONFIG?.BASE_URL || (window.location.origin + window.location.pathname);
             const qrUrl = `${baseUrl}?peer=${peerId}`;
             
             new QRCode(dom.get('qrcode'), {
@@ -500,7 +500,7 @@ class OneHostApp {
     async shareId() {
         try {
             const peerId = dom.getText('peerId');
-            const baseUrl = 'https://one-host.app/';
+            const baseUrl = window.CONFIG?.BASE_URL || 'https://one-host.app/';
             const qrUrl = `${baseUrl}?peer=${peerId}`;
             await navigator.share({ url: qrUrl });
             notificationService.success('Share successful!');

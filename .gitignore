@@ -10,7 +10,14 @@ package-lock.json
 node_modules/
 switch-env.js
 deploy.sh
+configure-git.sh
 ENVIRONMENT_SWITCHING.md
+
+# Security files (tokens, keys, etc.)
+.git-token
+*.key
+*.pem
+.env
 
 # Documentation files (keep only README.md and LICENSE)
 IMPLEMENTATION_GUIDE.md

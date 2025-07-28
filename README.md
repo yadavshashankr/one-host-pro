@@ -29,9 +29,7 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 
 ## 🚀 Getting Started
 
-1. Enter the appropriate URL in your browser:
-   - Production: https://one-host.app/
-   - Development: https://yadavshashankr.github.io/one-host-develop/
+1. Enter https://one-host.app/ in your browser 
 2. You'll receive a unique Peer ID
 3. Share your ID with others via:
    - Copy button

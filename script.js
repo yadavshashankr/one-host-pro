@@ -1285,24 +1285,14 @@ function initSocialMediaToggle() {
             
             elements.socialIcons.classList.toggle('show');
             console.log('Social icons show class:', elements.socialIcons.classList.contains('show'));
-            
-            // Update toggle button icon
-            const svg = this.querySelector('svg');
-            if (elements.socialIcons.classList.contains('show')) {
-                svg.innerHTML = '<path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>';
-            } else {
-                svg.innerHTML = '<circle cx="8" cy="8" r="1.5"/><circle cx="12" cy="8" r="1.5"/><circle cx="16" cy="8" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16" cy="12" r="1.5"/>';
-            }
         });
 
         // Close social media menu when clicking outside
-        document.addEventListener('click', function(event) {
-            if (!elements.socialToggle.contains(event.target) && !elements.socialIcons.contains(event.target)) {
-                elements.socialIcons.classList.remove('show');
-                const svg = elements.socialToggle.querySelector('svg');
-                svg.innerHTML = '<circle cx="8" cy="8" r="1.5"/><circle cx="12" cy="8" r="1.5"/><circle cx="16" cy="8" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16" cy="12" r="1.5"/>';
-            }
-        });
+                                document.addEventListener('click', function(event) {
+                            if (!elements.socialToggle.contains(event.target) && !elements.socialIcons.contains(event.target)) {
+                                elements.socialIcons.classList.remove('show');
+                            }
+                        });
         
         console.log('Social media toggle initialized successfully!');
     } else {

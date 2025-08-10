@@ -91,6 +91,12 @@ header {
     box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
 }
 
+.social-toggle img {
+    width: 24px;
+    height: 24px;
+    filter: brightness(0) saturate(100%) invert(1);
+}
+
 .social-icons {
     position: absolute;
     top: 50px;

@@ -1271,16 +1271,27 @@ function init() {
 
 // Social Media Toggle Functionality
 function initSocialMediaToggle() {
+    console.log('Initializing social media toggle...');
+    console.log('socialToggle element:', elements.socialToggle);
+    console.log('socialIcons element:', elements.socialIcons);
+    
     if (elements.socialToggle && elements.socialIcons) {
-        elements.socialToggle.addEventListener('click', function() {
+        console.log('Social media elements found, adding event listeners...');
+        
+        elements.socialToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Social toggle clicked!');
+            
             elements.socialIcons.classList.toggle('show');
+            console.log('Social icons show class:', elements.socialIcons.classList.contains('show'));
             
             // Update toggle button icon
             const svg = this.querySelector('svg');
             if (elements.socialIcons.classList.contains('show')) {
                 svg.innerHTML = '<path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>';
             } else {
-                svg.innerHTML = '<path d="M16 5c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm12 7c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2z"/>';
+                svg.innerHTML = '<circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/>';
             }
         });
 
@@ -1289,9 +1300,13 @@ function initSocialMediaToggle() {
             if (!elements.socialToggle.contains(event.target) && !elements.socialIcons.contains(event.target)) {
                 elements.socialIcons.classList.remove('show');
                 const svg = elements.socialToggle.querySelector('svg');
-                svg.innerHTML = '<path d="M16 5c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm12 7c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2z"/>';
+                svg.innerHTML = '<circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/>';
             }
         });
+        
+        console.log('Social media toggle initialized successfully!');
+    } else {
+        console.error('Social media elements not found!');
     }
 }
 

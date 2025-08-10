@@ -53,7 +53,10 @@ const elements = {
     peerIdEdit: document.getElementById('peer-id-edit'),
     editIdButton: document.getElementById('edit-id'),
     saveIdButton: document.getElementById('save-id'),
-    cancelEditButton: document.getElementById('cancel-edit')
+    cancelEditButton: document.getElementById('cancel-edit'),
+    // Social media elements
+    socialToggle: document.getElementById('social-toggle'),
+    socialIcons: document.getElementById('social-icons')
 };
 
 // State
@@ -1262,7 +1265,34 @@ function init() {
     checkUrlForPeerId(); // Check URL for peer ID on load
     initConnectionKeepAlive(); // Initialize connection keep-alive system
     initPeerIdEditing(); // Initialize peer ID editing
+    initSocialMediaToggle(); // Initialize social media toggle
     elements.transferProgress.classList.add('hidden'); // Always hide transfer bar
+}
+
+// Social Media Toggle Functionality
+function initSocialMediaToggle() {
+    if (elements.socialToggle && elements.socialIcons) {
+        elements.socialToggle.addEventListener('click', function() {
+            elements.socialIcons.classList.toggle('show');
+            
+            // Update toggle button icon
+            const svg = this.querySelector('svg');
+            if (elements.socialIcons.classList.contains('show')) {
+                svg.innerHTML = '<path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>';
+            } else {
+                svg.innerHTML = '<path d="M16 5c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm12 7c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2z"/>';
+            }
+        });
+
+        // Close social media menu when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!elements.socialToggle.contains(event.target) && !elements.socialIcons.contains(event.target)) {
+                elements.socialIcons.classList.remove('show');
+                const svg = elements.socialToggle.querySelector('svg');
+                svg.innerHTML = '<path d="M16 5c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm12 7c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2zm-6 0c-1.11 0-2 .9-2 2s.89 2 2 2 2-.9 2-2-.89-2-2-2z"/>';
+            }
+        });
+    }
 }
 
 // Add CSS classes for notification styling

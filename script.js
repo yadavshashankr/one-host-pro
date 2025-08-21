@@ -6,6 +6,76 @@ const STORE_NAME = window.CONFIG?.STORE_NAME || 'files';
 const KEEP_ALIVE_INTERVAL = window.CONFIG?.KEEP_ALIVE_INTERVAL || 30000;
 const CONNECTION_TIMEOUT = window.CONFIG?.CONNECTION_TIMEOUT || 60000;
 
+// Analytics Helper Functions
+const Analytics = {
+    // Safe tracking wrapper that never breaks functionality
+    track: function(eventName, parameters = {}) {
+        try {
+            if (typeof gtag !== 'undefined' && gtag) {
+                // Add common parameters to all events
+                const eventParams = {
+                    ...parameters,
+                    app_version: '1.0.0',
+                    environment: window.CONFIG?.ENVIRONMENT || 'production',
+                    timestamp: Date.now(),
+                    session_id: this.getSessionId()
+                };
+                
+                // Send event to Google Analytics
+                gtag('event', eventName, eventParams);
+                console.debug(`📊 Analytics: ${eventName}`, eventParams);
+            }
+        } catch (error) {
+            console.debug('Analytics tracking error (non-critical):', error);
+            // Never throw or break main functionality
+        }
+    },
+
+    // Get or create session ID
+    getSessionId: function() {
+        if (!this._sessionId) {
+            this._sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        return this._sessionId;
+    },
+
+    // Get file extension for categorization
+    getFileExtension: function(filename) {
+        return filename.split('.').pop().toLowerCase();
+    },
+
+    // Get file size category
+    getFileSizeCategory: function(bytes) {
+        if (bytes < 1024 * 1024) return 'small'; // < 1MB
+        if (bytes < 10 * 1024 * 1024) return 'medium'; // < 10MB
+        if (bytes < 100 * 1024 * 1024) return 'large'; // < 100MB
+        return 'extra_large'; // >= 100MB
+    },
+
+    // Get device type
+    getDeviceType: function() {
+        const userAgent = navigator.userAgent.toLowerCase();
+        if (/mobile|android|iphone|ipad|tablet/.test(userAgent)) {
+            return 'mobile';
+        }
+        return 'desktop';
+    },
+
+    // Calculate transfer speed
+    calculateSpeed: function(bytes, timeMs) {
+        const speedBps = (bytes / timeMs) * 1000; // bytes per second
+        return Math.round(speedBps / 1024 / 1024 * 100) / 100; // MB/s
+    }
+};
+
+// Track page load and initialization
+Analytics.track('app_initialized', {
+    device_type: Analytics.getDeviceType(),
+    user_agent: navigator.userAgent,
+    screen_resolution: `${screen.width}x${screen.height}`,
+    connection_type: navigator.connection?.effectiveType || 'unknown'
+});
+
 // Add simultaneous download message types
 const MESSAGE_TYPES = {
     FILE_INFO: 'file-info',
@@ -266,6 +336,13 @@ function checkUrlForPeerId() {
         const peerId = urlParams.get('peer');
         
         if (peerId && peerId.length > 0) {
+            // Track QR code scan/URL connection
+            Analytics.track('qr_code_connection_detected', {
+                peer_id_length: peerId.length,
+                device_type: Analytics.getDeviceType(),
+                referrer: document.referrer || 'direct'
+            });
+            
             elements.remotePeerId.value = peerId;
             // Wait a bit for PeerJS to initialize
             setTimeout(() => {
@@ -274,6 +351,9 @@ function checkUrlForPeerId() {
         }
     } catch (error) {
         console.error('Error parsing URL parameters:', error);
+        Analytics.track('qr_code_connection_error', {
+            error_message: error.message
+        });
     }
 }
 
@@ -296,12 +376,39 @@ async function shareId() {
         const peerId = elements.peerId.textContent;
         const baseUrl = window.CONFIG?.BASE_URL || 'https://one-host.app/';
         const qrUrl = `${baseUrl}?peer=${peerId}`;
+        
+        // Track share button click
+        Analytics.track('peer_id_share_clicked', {
+            peer_id_length: peerId.length,
+            device_type: Analytics.getDeviceType(),
+            share_method: 'web_share_api'
+        });
+        
         await navigator.share({ url: qrUrl });
         showNotification('Share successful!', 'success');
+        
+        // Track successful share
+        Analytics.track('peer_id_shared_successfully', {
+            peer_id_length: peerId.length,
+            device_type: Analytics.getDeviceType(),
+            share_method: 'web_share_api'
+        });
     } catch (error) {
         if (error.name !== 'AbortError') {
             console.error('Error sharing:', error);
             showNotification('Failed to share', 'error');
+            
+            // Track share failure
+            Analytics.track('peer_id_share_failed', {
+                error_type: error.name,
+                error_message: error.message,
+                device_type: Analytics.getDeviceType()
+            });
+        } else {
+            // Track share cancellation
+            Analytics.track('peer_id_share_cancelled', {
+                device_type: Analytics.getDeviceType()
+            });
         }
     }
 }
@@ -426,6 +533,14 @@ function setupConnectionHandlers(conn) {
         updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
         addRecentPeer(conn.peer);
+        
+        // Track successful connection
+        Analytics.track('connection_successful', {
+            peer_id_length: conn.peer.length,
+            total_connections: connections.size,
+            device_type: Analytics.getDeviceType(),
+            connection_type: conn.type || 'data'
+        });
         
         // Clear any existing timeout for this connection
         if (connectionTimeouts.has(conn.peer)) {
@@ -1024,12 +1139,33 @@ async function sendFile(file) {
 
         if (successCount > 0) {
             showNotification(`${file.name} sent successfully`, 'success');
+            
+            // Track successful file send
+            Analytics.track('file_sent_successfully', {
+                file_size: file.size,
+                file_type: Analytics.getFileExtension(file.name),
+                file_size_category: Analytics.getFileSizeCategory(file.size),
+                recipients_count: successCount,
+                total_connected_peers: connections.size,
+                device_type: Analytics.getDeviceType()
+            });
         } else {
             throw new Error('Failed to send file to any peers: ' + errors.join(', '));
         }
     } catch (error) {
         console.error('File send error:', error);
         showNotification(error.message, 'error');
+        
+        // Track file send failure
+        Analytics.track('file_send_failed', {
+            file_size: file.size,
+            file_type: Analytics.getFileExtension(file.name),
+            file_size_category: Analytics.getFileSizeCategory(file.size),
+            error_message: error.message,
+            connected_peers: connections.size,
+            device_type: Analytics.getDeviceType()
+        });
+        
         throw error; // Propagate error for queue processing
     } finally {
         transferInProgress = false;
@@ -1143,26 +1279,66 @@ function resetConnection() {
 
 // Event Listeners
 elements.copyId.addEventListener('click', () => {
-    navigator.clipboard.writeText(elements.peerId.textContent)
-        .then(() => showNotification('Peer ID copied to clipboard'))
-        .catch(err => showNotification('Failed to copy Peer ID', 'error'));
+    const peerId = elements.peerId.textContent;
+    
+    // Track peer ID copy event
+    Analytics.track('peer_id_copied', {
+        peer_id_length: peerId.length,
+        device_type: Analytics.getDeviceType()
+    });
+    
+    navigator.clipboard.writeText(peerId)
+        .then(() => {
+            showNotification('Peer ID copied to clipboard');
+            // Track successful copy
+            Analytics.track('peer_id_copy_success', {
+                peer_id_length: peerId.length
+            });
+        })
+        .catch(err => {
+            showNotification('Failed to copy Peer ID', 'error');
+            // Track copy failure
+            Analytics.track('peer_id_copy_failed', {
+                error: err.message
+            });
+        });
 });
 
 elements.connectButton.addEventListener('click', () => {
     const remotePeerIdValue = elements.remotePeerId.value.trim();
+    
+    // Track connect button click
+    Analytics.track('connect_button_clicked', {
+        has_peer_id: !!remotePeerIdValue,
+        peer_id_length: remotePeerIdValue.length,
+        current_connections: connections.size
+    });
+    
     if (!remotePeerIdValue) {
         showNotification('Please enter a Peer ID', 'error');
+        Analytics.track('connection_failed_no_peer_id');
         return;
     }
 
     if (connections.has(remotePeerIdValue)) {
         // showNotification('Already connected to this peer', 'warning'); // Suppressed as per user request
+        Analytics.track('connection_already_exists', {
+            target_peer_id_length: remotePeerIdValue.length
+        });
         return;
     }
 
     try {
         console.log('Attempting to connect to:', remotePeerIdValue);
         updateConnectionStatus('connecting', 'Connecting...');
+        
+        // Track connection attempt
+        Analytics.track('connection_attempted', {
+            target_peer_id_length: remotePeerIdValue.length,
+            current_connections: connections.size,
+            device_type: Analytics.getDeviceType()
+        });
+        
         const newConnection = peer.connect(remotePeerIdValue, {
             reliable: true
         });
@@ -1172,6 +1348,12 @@ elements.connectButton.addEventListener('click', () => {
         console.error('Connection attempt error:', error);
         showNotification('Failed to establish connection', 'error');
         updateConnectionStatus('', 'Connection failed');
+        
+        // Track connection failure
+        Analytics.track('connection_attempt_failed', {
+            error: error.message,
+            target_peer_id_length: remotePeerIdValue.length
+        });
     }
 });
 
@@ -1226,10 +1408,17 @@ elements.dropZone.addEventListener('drop', (e) => {
 
 // Add click handler for the drop zone
 elements.dropZone.addEventListener('click', () => {
+    // Track file upload icon click
+    Analytics.track('file_upload_icon_clicked', {
+        connected_peers: connections.size,
+        device_type: Analytics.getDeviceType()
+    });
+    
     if (connections.size > 0) {
         elements.fileInput.click();
     } else {
         showNotification('Please connect to at least one peer first', 'error');
+        Analytics.track('file_upload_blocked_no_connection');
     }
 });
 
@@ -1238,6 +1427,21 @@ elements.fileInput.addEventListener('change', (e) => {
     if (connections.size > 0) {
         const files = e.target.files;
         if (files.length > 0) {
+            // Track file selection
+            const fileStats = Array.from(files).map(file => ({
+                size: file.size,
+                type: Analytics.getFileExtension(file.name),
+                sizeCategory: Analytics.getFileSizeCategory(file.size)
+            }));
+            
+            Analytics.track('files_selected_for_upload', {
+                file_count: files.length,
+                total_size: fileStats.reduce((sum, f) => sum + f.size, 0),
+                file_types: [...new Set(fileStats.map(f => f.type))].join(','),
+                size_categories: [...new Set(fileStats.map(f => f.sizeCategory))].join(','),
+                connected_peers: connections.size
+            });
+            
             if (files.length > 1) {
                 showNotification(`Processing ${files.length} files`, 'info');
             }
@@ -1250,6 +1454,7 @@ elements.fileInput.addEventListener('change', (e) => {
         e.target.value = '';
     } else {
         showNotification('Please connect to at least one peer first', 'error');
+        Analytics.track('file_upload_blocked_no_connection');
     }
 });
 
@@ -1282,6 +1487,14 @@ function initSocialMediaToggle() {
             e.preventDefault();
             e.stopPropagation();
             console.log('Social toggle clicked!');
+            
+            const isOpening = !elements.socialIcons.classList.contains('show');
+            
+            // Track social media toggle click
+            Analytics.track('social_media_toggle_clicked', {
+                action: isOpening ? 'open' : 'close',
+                device_type: Analytics.getDeviceType()
+            });
             
             elements.socialIcons.classList.toggle('show');
             console.log('Social icons show class:', elements.socialIcons.classList.contains('show'));
@@ -1397,6 +1610,15 @@ function updateFilesList(listElement, fileInfo, type) {
     downloadBtn.innerHTML = '<span class="material-icons">download</span>';
     downloadBtn.onclick = async () => {
         try {
+            // Track download button click
+            Analytics.track('file_download_clicked', {
+                file_size: fileInfo.size,
+                file_type: Analytics.getFileExtension(fileInfo.name),
+                file_size_category: Analytics.getFileSizeCategory(fileInfo.size),
+                download_type: type === 'sent' ? 'local_blob' : 'remote_request',
+                device_type: Analytics.getDeviceType()
+            });
+            
             if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
                 // For sent files, we have the blob locally
                 const blob = sentFileBlobs.get(fileInfo.id);
@@ -1408,6 +1630,14 @@ function updateFilesList(listElement, fileInfo, type) {
         } catch (error) {
             console.error('Error downloading file:', error);
             showNotification('Failed to download file: ' + error.message, 'error');
+            
+            // Track download failure
+            Analytics.track('file_download_failed', {
+                file_size: fileInfo.size,
+                file_type: Analytics.getFileExtension(fileInfo.name),
+                error_message: error.message,
+                download_type: type === 'sent' ? 'local_blob' : 'remote_request'
+            });
         }
     };
     
@@ -1596,6 +1826,14 @@ function downloadBlob(blob, fileName, fileId) {
     a.click();
     document.body.removeChild(a);
 
+    // Track successful download
+    Analytics.track('file_downloaded_successfully', {
+        file_size: blob.size,
+        file_type: Analytics.getFileExtension(fileName),
+        file_size_category: Analytics.getFileSizeCategory(blob.size),
+        device_type: Analytics.getDeviceType()
+    });
+
     // If fileId is provided, update the UI
     if (fileId) {
         const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
@@ -1610,6 +1848,12 @@ function downloadBlob(blob, fileName, fileId) {
                 // Store the blob URL for opening the file
                 const openUrl = URL.createObjectURL(blob);
                 downloadButton.onclick = () => {
+                    // Track file open click
+                    Analytics.track('file_open_clicked', {
+                        file_size: blob.size,
+                        file_type: Analytics.getFileExtension(fileName),
+                        device_type: Analytics.getDeviceType()
+                    });
                     window.open(openUrl, '_blank');
                 };
             }
@@ -1738,6 +1982,13 @@ function startEditingPeerId() {
     if (!isEditingAllowed()) return;
     
     const currentId = elements.peerId.textContent;
+    
+    // Track peer ID edit start
+    Analytics.track('peer_id_edit_started', {
+        current_peer_id_length: currentId.length,
+        device_type: Analytics.getDeviceType()
+    });
+    
     elements.peerIdEdit.value = currentId;
     
     elements.peerId.classList.add('hidden');
@@ -1821,14 +2072,31 @@ async function saveEditedPeerId() {
         generateQRCode(newPeerId);
         
         showNotification('Peer ID updated successfully', 'success');
+        
+        // Track successful peer ID change
+        Analytics.track('peer_id_changed_success', {
+            new_peer_id_length: newPeerId.length,
+            device_type: Analytics.getDeviceType()
+        });
     } catch (error) {
         console.error('Error updating peer ID:', error);
         
         // Show specific error message for taken IDs
         if (error.type === 'unavailable-id') {
             showNotification('This ID is already taken. Please try another one.', 'error');
+            // Track specific error type
+            Analytics.track('peer_id_change_failed', {
+                error_type: 'unavailable_id',
+                attempted_peer_id_length: newPeerId.length
+            });
         } else {
             showNotification('Failed to update peer ID. Please try again.', 'error');
+            // Track general error
+            Analytics.track('peer_id_change_failed', {
+                error_type: 'general_error',
+                error_message: error.message,
+                attempted_peer_id_length: newPeerId.length
+            });
         }
         
         updateConnectionStatus('', 'Failed to update peer ID');

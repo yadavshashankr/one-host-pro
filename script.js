@@ -1507,6 +1507,23 @@ function initSocialMediaToggle() {
                             }
                         });
         
+        // Add analytics tracking for individual social media button clicks
+        const socialIconLinks = elements.socialIcons.querySelectorAll('a.social-icon');
+        socialIconLinks.forEach(link => {
+            link.addEventListener('click', function(e) {
+                const socialType = this.classList.value.replace('social-icon', '').trim() || 'unknown';
+                const linkTitle = this.getAttribute('title') || socialType;
+                
+                // Track social media button click
+                Analytics.track('social_media_button_clicked', {
+                    social_type: socialType,
+                    social_title: linkTitle,
+                    device_type: Analytics.getDeviceType(),
+                    url: this.href
+                });
+            });
+        });
+        
         console.log('Social media toggle initialized successfully!');
     } else {
         console.error('Social media elements not found!');

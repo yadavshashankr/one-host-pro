@@ -525,15 +525,30 @@ function initPeerJS() {
         // Clear existing connections
         connections.clear();
 
-        // Create new peer with auto-generated ID
+        // Create new peer with enhanced local network optimization
         peer = new Peer({
             debug: 2,
             config: {
                 iceServers: [
+                    // Local network candidates (highest priority)
                     { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
-                ]
-            }
+                    { urls: 'stun:global.stun.twilio.com:3478' },
+                    // Additional STUN servers for better local discovery
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' }
+                ],
+                iceCandidatePoolSize: 10,
+                iceTransportPolicy: 'all',
+                bundlePolicy: 'max-bundle',
+                rtcpMuxPolicy: 'require'
+            },
+            // Optimize connection settings for local transfers
+            reliable: true,
+            ordered: true,
+            maxRetries: 3,
+            chunkedMessaging: true
         });
 
         setupPeerHandlers();
@@ -588,6 +603,9 @@ function setupConnectionHandlers(conn) {
             type: 'connection-notification',
             peerId: peer.id
         });
+        
+        // Start monitoring connection quality
+        monitorConnectionQuality(conn);
     });
 
     conn.on('data', async (data) => {
@@ -718,6 +736,94 @@ function setupConnectionHandlers(conn) {
             connectionTimeouts.set(conn.peer, timeout);
         }
     });
+}
+
+// Enhanced Connection Quality Monitoring
+function monitorConnectionQuality(conn) {
+    // Monitor ICE connection state changes
+    if (conn.peerConnection) {
+        conn.peerConnection.oniceconnectionstatechange = () => {
+            console.log(`ICE Connection State for ${conn.peer}:`, conn.peerConnection.iceConnectionState);
+            
+            // Detect local network usage
+            const localCandidates = conn.peerConnection.localDescription?.sdp?.includes('host');
+            const remoteCandidates = conn.peerConnection.remoteDescription?.sdp?.includes('host');
+            
+            if (localCandidates || remoteCandidates) {
+                console.log('✅ Local network connection detected!');
+                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size} (Local Network)`);
+                showConnectionQuality('local-network', 'Local Network');
+            } else {
+                updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size} (Internet)`);
+                showConnectionQuality('internet', 'Internet');
+            }
+        };
+        
+        // Monitor connection quality
+        conn.peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                const candidateType = event.candidate.candidate.split(' ')[7];
+                console.log(`ICE Candidate type: ${candidateType} for ${conn.peer}`);
+                
+                // Log local network candidates
+                if (candidateType === 'host') {
+                    console.log('🎯 Local network candidate found!');
+                }
+            }
+        };
+    }
+}
+
+// Show connection quality indicators
+function showConnectionQuality(type, label) {
+    const qualityElement = document.getElementById('connection-quality');
+    const typeElement = document.getElementById('connection-type');
+    
+    if (qualityElement && typeElement) {
+        qualityElement.classList.remove('hidden', 'local-network', 'internet');
+        qualityElement.classList.add(type);
+        typeElement.textContent = label;
+    }
+}
+
+// Hide connection quality indicators
+function hideConnectionQuality() {
+    const qualityElement = document.getElementById('connection-quality');
+    if (qualityElement) {
+        qualityElement.classList.add('hidden');
+    }
+}
+
+// Local Network Detection Function
+function detectLocalNetworkPeers() {
+    const localConnections = [];
+    
+    for (const [peerId, conn] of connections) {
+        if (conn.peerConnection && conn.peerConnection.iceConnectionState === 'connected') {
+            const sdp = conn.peerConnection.localDescription?.sdp || '';
+            if (sdp.includes('host')) {
+                localConnections.push(peerId);
+            }
+        }
+    }
+    
+    return localConnections;
+}
+
+// Connection Speed Monitoring
+function monitorTransferSpeed(fileId, startTime, bytesTransferred) {
+    const elapsed = Date.now() - startTime;
+    const speedMbps = (bytesTransferred / elapsed) * 1000 / (1024 * 1024);
+    
+    console.log(`📊 Transfer Speed for ${fileId}: ${speedMbps.toFixed(2)} MB/s`);
+    
+    // Update UI with speed information
+    const speedInfo = document.getElementById('transfer-speed');
+    if (speedInfo) {
+        speedInfo.textContent = `${speedMbps.toFixed(2)} MB/s`;
+    }
+    
+    return speedMbps;
 }
 
 // Helper function to generate unique file ID
@@ -874,6 +980,16 @@ async function sendFileToPeer(file, conn, fileId, fileBlob) {
         });
 
         console.log(`File info sent successfully to peer ${conn.peer}`);
+        
+        // Track transfer start for speed monitoring
+        const transferStartTime = Date.now();
+        window.currentTransfer = {
+            fileId: fileId,
+            startTime: transferStartTime,
+            fileSize: file.size,
+            peerId: conn.peer
+        };
+        
     } catch (error) {
         console.error(`Error sending file info to peer ${conn.peer}:`, error);
         throw new Error(`Failed to send to peer ${conn.peer}: ${error.message}`);
@@ -915,6 +1031,7 @@ async function handleBlobRequest(data, conn) {
         });
 
         // Send chunks
+        const transferStartTime = Date.now();
         while (offset < blob.size) {
             if (!conn.open) {
                 throw new Error('Connection lost during transfer');
@@ -936,6 +1053,12 @@ async function handleBlobRequest(data, conn) {
             if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress, fileId);
                 lastProgressUpdate = currentProgress;
+                
+                // Monitor transfer speed
+                const speed = monitorTransferSpeed(fileId, transferStartTime, offset);
+                
+                // Update transfer info with speed
+                updateTransferInfo(`Sending ${data.fileName}... (${speed.toFixed(2)} MB/s)`);
             }
         }
 
@@ -1622,6 +1745,14 @@ function updateConnectionStatus(status, message) {
     } else {
         document.title = 'One-Host';
     }
+    
+    // Show/hide connection quality indicators
+    if (status === 'connected' && connections.size > 0) {
+        // Quality indicators will be shown by monitorConnectionQuality
+    } else {
+        hideConnectionQuality();
+    }
+    
     updateEditButtonState(); // Add this line
 }
 

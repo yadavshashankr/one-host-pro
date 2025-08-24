@@ -411,6 +411,41 @@ input[type="text"]:focus {
     100% { transform: scale(1); opacity: 1; }
 }
 
+/* Connection Quality Indicators */
+.connection-quality {
+    margin-top: 10px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    font-size: 14px;
+    color: #666;
+}
+
+.quality-indicator, .speed-indicator {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.quality-icon, .speed-icon {
+    font-size: 16px;
+    color: var(--success-color);
+}
+
+.connection-quality.hidden {
+    display: none;
+}
+
+/* Local Network Indicator */
+.connection-quality.local-network .quality-icon {
+    color: var(--success-color);
+}
+
+/* Internet Connection Indicator */
+.connection-quality.internet .quality-icon {
+    color: var(--warning-color);
+}
+
 /* File transfer section styles */
 #file-transfer-section {
     background: var(--card-background);

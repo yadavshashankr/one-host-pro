@@ -6,6 +6,12 @@ const STORE_NAME = window.CONFIG?.STORE_NAME || 'files';
 const KEEP_ALIVE_INTERVAL = window.CONFIG?.KEEP_ALIVE_INTERVAL || 30000;
 const CONNECTION_TIMEOUT = window.CONFIG?.CONNECTION_TIMEOUT || 60000;
 
+// Enhanced Connection Management Constants
+const ENHANCED_KEEP_ALIVE_INTERVAL = 15000; // 15 seconds instead of 30
+const CONNECTION_HEALTH_CHECK_INTERVAL = 10000; // 10 seconds
+const MAX_RECONNECTION_ATTEMPTS = 3;
+const RECONNECTION_DELAY = 2000; // 2 seconds
+
 // Analytics Helper Functions
 const Analytics = {
     // Safe tracking wrapper that never breaks functionality
@@ -139,6 +145,9 @@ let fileChunks = {}; // Initialize fileChunks object
 let keepAliveInterval = null;
 let connectionTimeouts = new Map();
 let isPageVisible = true;
+
+// Enhanced Connection State Tracking
+const connectionStates = new Map(); // Track connection health and status
 
 // Add file history tracking with Sets for uniqueness
 const fileHistory = {
@@ -438,15 +447,26 @@ function setupPeerHandlers() {
 
     peer.on('error', (error) => {
         console.error('PeerJS Error:', error);
+        
+        // Don't show error for temporary network issues
+        if (error.type === 'network' || error.type === 'disconnected') {
+            console.log('Temporary network issue detected, attempting recovery...');
+            
+            // Only show notification if recovery fails after multiple attempts
+            setTimeout(() => {
+                if (!peer || peer.destroyed) {
+                    showNotification('Connection lost. Please refresh the page.', 'warning');
+                }
+            }, 5000);
+            
+            return;
+        }
+        
         let errorMessage = 'Connection error';
         
         // Handle specific error types
         if (error.type === 'peer-unavailable') {
             errorMessage = 'Peer is not available or does not exist';
-        } else if (error.type === 'network') {
-            errorMessage = 'Network connection error';
-        } else if (error.type === 'disconnected') {
-            errorMessage = 'Disconnected from server';
         } else if (error.type === 'server-error') {
             errorMessage = 'Server error occurred';
         } else if (error.type === 'unavailable-id') {
@@ -527,8 +547,23 @@ function initPeerJS() {
 
 // Setup connection event handlers
 function setupConnectionHandlers(conn) {
+    // Track connection state
+    connectionStates.set(conn.peer, {
+        status: 'connecting',
+        lastActivity: Date.now(),
+        reconnectAttempts: 0
+    });
+    
     conn.on('open', () => {
         console.log('Connection opened with:', conn.peer);
+        
+        // Update connection state
+        connectionStates.set(conn.peer, {
+            status: 'connected',
+            lastActivity: Date.now(),
+            reconnectAttempts: 0
+        });
+        
         isConnectionReady = true;
         updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
@@ -641,6 +676,15 @@ function setupConnectionHandlers(conn) {
 
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
+        
+        // Update connection state
+        const currentState = connectionStates.get(conn.peer) || {};
+        connectionStates.set(conn.peer, {
+            status: 'closed',
+            lastActivity: Date.now(),
+            reconnectAttempts: currentState.reconnectAttempts || 0
+        });
+        
         connections.delete(conn.peer);
         
         // Clear timeout for this connection
@@ -1719,41 +1763,94 @@ elements.clearPeers.addEventListener('click', () => {
 
 // Initialize connection keep-alive system
 function initConnectionKeepAlive() {
-    // Start keep-alive interval
-    keepAliveInterval = setInterval(() => {
-        if (connections.size > 0 && isPageVisible) {
+    // Clear any existing intervals
+    if (window.connectionIntervals) {
+        Object.values(window.connectionIntervals).forEach(interval => clearInterval(interval));
+    }
+
+    // Start enhanced keep-alive interval
+    const keepAliveInterval = setInterval(() => {
+        if (connections.size > 0) {
             sendKeepAlive();
         }
-    }, KEEP_ALIVE_INTERVAL);
+    }, ENHANCED_KEEP_ALIVE_INTERVAL);
 
-    // Handle page visibility changes
+    // Start connection health check interval
+    const healthCheckInterval = setInterval(() => {
+        if (connections.size > 0) {
+            checkConnectionHealth();
+        }
+    }, CONNECTION_HEALTH_CHECK_INTERVAL);
+
+    // Store intervals for cleanup
+    window.connectionIntervals = {
+        keepAlive: keepAliveInterval,
+        healthCheck: healthCheckInterval
+    };
+
+    // Enhanced visibility change handling
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Handle page focus/blur events
     window.addEventListener('focus', handlePageFocus);
     window.addEventListener('blur', handlePageBlur);
-    
-    // Handle beforeunload event
     window.addEventListener('beforeunload', handleBeforeUnload);
+}
+
+// New function to check connection health
+function checkConnectionHealth() {
+    for (const [peerId, conn] of connections) {
+        if (!conn.open) {
+            console.log(`Connection to ${peerId} is unhealthy, attempting recovery...`);
+            attemptConnectionRecovery(peerId);
+        }
+    }
+}
+
+// New function for connection recovery
+function attemptConnectionRecovery(peerId) {
+    const attemptKey = `reconnect_attempt_${peerId}`;
+    const attempts = parseInt(localStorage.getItem(attemptKey) || '0');
+    
+    if (attempts < MAX_RECONNECTION_ATTEMPTS) {
+        localStorage.setItem(attemptKey, (attempts + 1).toString());
+        
+        setTimeout(() => {
+            console.log(`Attempting to reconnect to ${peerId} (attempt ${attempts + 1})`);
+            reconnectToPeer(peerId);
+        }, RECONNECTION_DELAY);
+    } else {
+        console.log(`Max reconnection attempts reached for ${peerId}`);
+        localStorage.removeItem(attemptKey);
+        connections.delete(peerId);
+        updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
+            connections.size > 0 ? `Connected to peer(s): ${connections.size}` : 'Ready to connect');
+    }
 }
 
 // Handle page visibility changes
 function handleVisibilityChange() {
+    const wasVisible = isPageVisible;
     isPageVisible = !document.hidden;
     
-    if (isPageVisible) {
+    if (isPageVisible && !wasVisible) {
         console.log('Page became visible, checking connections...');
-        checkConnections();
-    } else {
-        console.log('Page became hidden, maintaining connections...');
+        // Delay the check to allow browser to stabilize
+        setTimeout(() => {
+            checkConnectionHealth();
+            sendKeepAlive();
+        }, 1000);
+    } else if (!isPageVisible && wasVisible) {
+        console.log('Page became hidden, sending final keep-alive...');
         sendKeepAlive();
     }
 }
 
-// Handle page focus
+// Enhanced page focus handling
 function handlePageFocus() {
     console.log('Page focused, checking connections...');
-    checkConnections();
+    setTimeout(() => {
+        checkConnectionHealth();
+        sendKeepAlive();
+    }, 500);
 }
 
 // Handle page blur

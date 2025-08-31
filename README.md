@@ -133,3 +133,4 @@ A browser-based peer-to-peer file sharing application using WebRTC. Share files 
 - Cross-platform compatibility
 - Intuitive visual feedback
 - Seamless file opening
+# Pro Environment Ready

@@ -1,17 +1,19 @@
 // Simple Environment Configuration
 // Change this single variable to switch between environments
-const CURRENT_ENVIRONMENT = 'production'; // Change to 'production' for prod
+const CURRENT_ENVIRONMENT = 'development'; // Change to 'production' for prod
 
 // Environment URLs
 const ENVIRONMENT_URLS = {
     production: 'https://one-host.app/',
-    development: 'https://yadavshashankr.github.io/one-host-develop/'
+    development: 'https://yadavshashankr.github.io/one-host-develop/',
+    pro: 'https://yadavshashankr.github.io/one-host-pro/'
 };
 
 // GitHub Repository URLs
 const GITHUB_URLS = {
     production: 'https://github.com/yadavshashankr/one-host.git',
-    development: 'https://github.com/yadavshashankr/one-host-develop.git'
+    development: 'https://github.com/yadavshashankr/one-host-develop.git',
+    pro: 'https://github.com/yadavshashankr/one-host-pro.git'
 };
 
 // Get the base URL for current environment
@@ -27,6 +29,7 @@ const CONFIG = {
     ENVIRONMENT: CURRENT_ENVIRONMENT,
     IS_PRODUCTION: CURRENT_ENVIRONMENT === 'production',
     IS_DEVELOPMENT: CURRENT_ENVIRONMENT === 'development',
+    IS_PRO: CURRENT_ENVIRONMENT === 'pro',
     // Other constants
     CHUNK_SIZE: 16384,
     DB_NAME: 'fileTransferDB',
